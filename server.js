@@ -16,6 +16,7 @@ const nodeId = new NodeId(108, 4); // Heartbeat BIT0 데이터 (ns=4; i=108)
 const endpointUrl = "opc.tcp://192.168.0.102:4840"; // PLC의 OPC UA 주소
 
 let session;
+let client;
 
 // 미들웨어 설정
 app.use(cors());
@@ -24,12 +25,22 @@ app.use(express.urlencoded({ extended: true }));
 
 async function initOPCUA() {
   try {
-    const client = OPCUAClient.create({ endpoint_must_exist: false });
+    client = OPCUAClient.create({ endpoint_must_exist: false });
+    
+    // 연결 상태 변경 이벤트 리스너
+    client.on("connection_lost", () => {
+      console.error(`[${new Date().toISOString()}] OPC UA 연결 끊김`);
+    });
+    
+    client.on("connection_reestablished", () => {
+      console.log(`[${new Date().toISOString()}] OPC UA 연결 재설정됨`);
+    });
+    
     await client.connect(endpointUrl);
     session = await client.createSession();
-    console.log("OPC UA 연결됨");
+    console.log(`[${new Date().toISOString()}] OPC UA 연결됨`);
   } catch (err) {
-    console.error("OPC UA 연결 오류:", err.message);
+    console.error(`[${new Date().toISOString()}] OPC UA 연결 오류: ${err.message}`);
   }
 }
 
@@ -38,8 +49,32 @@ async function readPLCData() {
     const dataValue = await session.readVariableValue(nodeId);
     return dataValue.value.value;
   } catch (err) {
-    console.error("데이터 읽기 오류:", err.message);
+    console.error(`[${new Date().toISOString()}] 데이터 읽기 오류: ${err.message}`);
     throw err;
+  }
+}
+
+// 통신 상태 확인
+async function checkConnectionStatus() {
+  try {
+    const status = {
+      connected: client ? client.isConnected() : false,
+      sessionActive: session ? !session.isClosed() : false,
+      endpointUrl: endpointUrl
+    };
+    
+    console.log(`[${new Date().toISOString()}] 통신 상태:`, {
+      연결상태: status.connected ? '연결됨' : '연결안됨',
+      세션상태: status.sessionActive ? '활성화' : '비활성화',
+      서버주소: status.endpointUrl
+    });
+    
+    if (!status.connected || !status.sessionActive) {
+      console.log(`[${new Date().toISOString()}] 재연결 시도 중...`);
+      await initOPCUA();
+    }
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] 상태 확인 오류: ${err.message}`);
   }
 }
 
@@ -56,6 +91,9 @@ async function startDataCollection() {
 // 1초마다 데이터 수집
 setInterval(startDataCollection, 1000);
 
+// 5초마다 통신 상태 확인
+setInterval(checkConnectionStatus, 5000);
+
 // 기본 라우트
 app.get('/', (req, res) => {
   res.json({ message: 'Network Agents Server is running!' });
@@ -63,6 +101,6 @@ app.get('/', (req, res) => {
 
 server.listen(port, async () => {
   await initOPCUA();
-  console.log(`Server is running on port ${port}`);
-  console.log('Heartbeat 데이터 수집 시작...');
+  console.log(`[${new Date().toISOString()}] Server is running on port ${port}`);
+  console.log(`[${new Date().toISOString()}] Heartbeat 데이터 수집 시작...`);
 });
