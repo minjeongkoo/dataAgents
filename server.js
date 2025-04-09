@@ -1,6 +1,6 @@
 const express = require('express');
 const http = require('http');
-const { OPCUAClient, NodeId } = require('node-opcua');
+const { OPCUAClient, AttributeIds, makeNodeId } = require("node-opcua");
 const cors = require('cors');
 const dotenv = require('dotenv');
 
@@ -12,7 +12,7 @@ const server = http.createServer(app);
 const port = process.env.PORT || 3000;
 
 // OPC UA 노드 ID 설정
-const nodeId = new NodeId(108, 4); // Heartbeat BIT0 데이터 (ns=4; i=108)
+const nodeId = makeNodeId(108, 4); // ns=4;i=108
 const endpointUrl = "opc.tcp://192.168.0.102:4840"; // PLC의 OPC UA 주소
 
 let session;
@@ -33,13 +33,15 @@ async function initOPCUA() {
     }
 
     client = OPCUAClient.create({
-      endpoint_must_exist: false,
+      endpointMustExist: true, // <-- 수정됨
       connectionStrategy: {
         maxRetry: MAX_RETRIES,
         initialDelay: 2000,
         maxDelay: 10 * 1000
       },
-      keepSessionAlive: true
+      keepSessionAlive: true,
+      securityMode: 1,
+      securityPolicy: "None"
     });
     
     // 연결 상태 변경 이벤트 리스너
@@ -61,7 +63,9 @@ async function initOPCUA() {
     await client.connect(endpointUrl);
     
     console.log(`[${new Date().toISOString()}] 세션 생성 중...`);
-    session = await client.createSession();
+    session = await client.createSession({
+      requestedSessionTimeout: 60000
+    });
     
     isConnected = true;
     retryCount = 0;
@@ -88,11 +92,16 @@ async function readPLCData() {
     }
     
     console.log(`[${new Date().toISOString()}] 노드 ${nodeId.toString()}에서 데이터 읽기 시도`);
-    const dataValue = await session.readVariableValue(nodeId);
+    const dataValue = await session.read({
+      nodeId: nodeId,
+      attributeId: AttributeIds.Value
+    });
+    
     console.log(`[${new Date().toISOString()}] 읽은 데이터:`, {
       값: dataValue.value.value,
       타입: dataValue.value.dataType.toString(),
-      상태: dataValue.statusCode.toString()
+      상태: dataValue.statusCode.toString(),
+      타임스탬프: dataValue.serverTimestamp
     });
     
     return dataValue.value.value;
