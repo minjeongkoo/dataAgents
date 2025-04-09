@@ -17,6 +17,9 @@ const endpointUrl = "opc.tcp://192.168.0.102:4840"; // PLC의 OPC UA 주소
 
 let session;
 let client;
+let isConnected = false;
+let retryCount = 0;
+const MAX_RETRIES = 5;
 
 // 미들웨어 설정
 app.use(cors());
@@ -25,28 +28,73 @@ app.use(express.urlencoded({ extended: true }));
 
 async function initOPCUA() {
   try {
-    client = OPCUAClient.create({ endpoint_must_exist: false });
+    if (client) {
+      await client.disconnect();
+    }
+
+    client = OPCUAClient.create({
+      endpoint_must_exist: false,
+      connectionStrategy: {
+        maxRetry: MAX_RETRIES,
+        initialDelay: 2000,
+        maxDelay: 10 * 1000
+      },
+      keepSessionAlive: true
+    });
     
     // 연결 상태 변경 이벤트 리스너
     client.on("connection_lost", () => {
+      isConnected = false;
       console.error(`[${new Date().toISOString()}] OPC UA 연결 끊김`);
     });
     
     client.on("connection_reestablished", () => {
+      isConnected = true;
       console.log(`[${new Date().toISOString()}] OPC UA 연결 재설정됨`);
     });
+
+    client.on("backoff", (retry, delay) => {
+      console.log(`[${new Date().toISOString()}] 재연결 시도 ${retry}/${MAX_RETRIES}, ${delay}ms 후 재시도`);
+    });
     
+    console.log(`[${new Date().toISOString()}] OPC UA 서버에 연결 시도 중... (${endpointUrl})`);
     await client.connect(endpointUrl);
+    
+    console.log(`[${new Date().toISOString()}] 세션 생성 중...`);
     session = await client.createSession();
+    
+    isConnected = true;
+    retryCount = 0;
     console.log(`[${new Date().toISOString()}] OPC UA 연결됨`);
+    
+    // 연결 후 첫 데이터 읽기 시도
+    await readPLCData();
   } catch (err) {
+    isConnected = false;
+    retryCount++;
     console.error(`[${new Date().toISOString()}] OPC UA 연결 오류: ${err.message}`);
+    
+    if (retryCount < MAX_RETRIES) {
+      console.log(`[${new Date().toISOString()}] ${retryCount}초 후 재연결 시도...`);
+      setTimeout(initOPCUA, retryCount * 1000);
+    }
   }
 }
 
 async function readPLCData() {
   try {
+    if (!isConnected || !session) {
+      throw new Error('OPC UA 연결이 되어있지 않습니다');
+    }
+    
+    console.log(`[${new Date().toISOString()}] 노드 ${nodeId.toString()}에서 데이터 읽기 시도`);
     const dataValue = await session.readVariableValue(nodeId);
+    console.log(`[${new Date().toISOString()}] 읽은 데이터:`, {
+      값: dataValue.value.value,
+      타입: dataValue.value.dataType.toString(),
+      상태: dataValue.statusCode.toString()
+    });
+    
     return dataValue.value.value;
   } catch (err) {
     console.error(`[${new Date().toISOString()}] 데이터 읽기 오류: ${err.message}`);
@@ -58,15 +106,17 @@ async function readPLCData() {
 async function checkConnectionStatus() {
   try {
     const status = {
-      connected: client ? client.isConnected() : false,
+      connected: isConnected,
       sessionActive: session ? !session.isClosed() : false,
-      endpointUrl: endpointUrl
+      endpointUrl: endpointUrl,
+      retryCount: retryCount
     };
     
     console.log(`[${new Date().toISOString()}] 통신 상태:`, {
       연결상태: status.connected ? '연결됨' : '연결안됨',
       세션상태: status.sessionActive ? '활성화' : '비활성화',
-      서버주소: status.endpointUrl
+      서버주소: status.endpointUrl,
+      재시도횟수: status.retryCount
     });
     
     if (!status.connected || !status.sessionActive) {
