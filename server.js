@@ -1,6 +1,6 @@
 const express = require('express');
 const http = require('http');
-const { OPCUAClient } = require('node-opcua');
+const { OPCUAClient, NodeId } = require('node-opcua');
 const cors = require('cors');
 const dotenv = require('dotenv');
 
@@ -12,7 +12,7 @@ const server = http.createServer(app);
 const port = process.env.PORT || 3000;
 
 // OPC UA 노드 ID 설정
-const nodeId = "ns=4; i=92"; // 수집할 데이터 노드 ID
+const nodeId = new NodeId(92, 4); // 네임스페이스 4의 노드 92
 const endpointUrl = "opc.tcp://192.168.0.102:4840"; // PLC의 OPC UA 주소
 
 let session;
@@ -23,15 +23,24 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 async function initOPCUA() {
-  const client = OPCUAClient.create({ endpoint_must_exist: false });
-  await client.connect(endpointUrl);
-  session = await client.createSession();
-  console.log("OPC UA 연결됨");
+  try {
+    const client = OPCUAClient.create({ endpoint_must_exist: false });
+    await client.connect(endpointUrl);
+    session = await client.createSession();
+    console.log("OPC UA 연결됨");
+  } catch (err) {
+    console.error("OPC UA 연결 오류:", err.message);
+  }
 }
 
 async function readPLCData() {
-  const dataValue = await session.readVariableValue(nodeId);
-  return dataValue.value.value;
+  try {
+    const dataValue = await session.readVariableValue(nodeId);
+    return dataValue.value.value;
+  } catch (err) {
+    console.error("데이터 읽기 오류:", err.message);
+    throw err;
+  }
 }
 
 // PLC 데이터 수집 및 로깅
