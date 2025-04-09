@@ -13,7 +13,7 @@ const port = process.env.PORT || 3000;
 
 // OPC UA 노드 ID 설정
 const nodeId = "ns=4; i=92"; // 수집할 데이터 노드 ID
-const endpointUrl = "opc.tcp://192.168.0.5:4840"; // PLC의 OPC UA 주소
+const endpointUrl = "opc.tcp://192.168.0.102:4840"; // PLC의 OPC UA 주소
 
 let session;
 
