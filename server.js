@@ -12,7 +12,7 @@ const server = http.createServer(app);
 const port = process.env.PORT || 3000;
 
 // OPC UA 노드 ID 설정
-const nodeId = new NodeId(92, 4); // 네임스페이스 4의 노드 92
+const nodeId = new NodeId(108, 4); // Heartbeat BIT0 데이터 (ns=4; i=108)
 const endpointUrl = "opc.tcp://192.168.0.102:4840"; // PLC의 OPC UA 주소
 
 let session;
@@ -47,7 +47,7 @@ async function readPLCData() {
 async function startDataCollection() {
   try {
     const value = await readPLCData();
-    console.log(`[${new Date().toISOString()}] PLC 데이터: ${value}`);
+    console.log(`[${new Date().toISOString()}] Heartbeat 상태: ${value ? 'ON' : 'OFF'}`);
   } catch (err) {
     console.error(`[${new Date().toISOString()}] 데이터 수집 오류: ${err.message}`);
   }
@@ -64,5 +64,5 @@ app.get('/', (req, res) => {
 server.listen(port, async () => {
   await initOPCUA();
   console.log(`Server is running on port ${port}`);
-  console.log('PLC 데이터 수집 시작...');
+  console.log('Heartbeat 데이터 수집 시작...');
 });
