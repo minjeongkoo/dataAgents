@@ -1,16 +1,26 @@
 const express = require('express');
 const http = require('http');
-const WebSocket = require('ws');
 const { OPCUAClient } = require('node-opcua');
+const cors = require('cors');
+const dotenv = require('dotenv');
+
+// 환경 변수 로드
+dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const port = process.env.PORT || 3000;
 
+// OPC UA 노드 ID 설정
+const nodeId = "ns=4; i=92"; // 수집할 데이터 노드 ID
 const endpointUrl = "opc.tcp://192.168.0.5:4840"; // PLC의 OPC UA 주소
-const nodeId = "ns=1;s=Temperature"; // 수집할 데이터 노드 ID
 
 let session;
+
+// 미들웨어 설정
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 async function initOPCUA() {
   const client = OPCUAClient.create({ endpoint_must_exist: false });
@@ -24,27 +34,26 @@ async function readPLCData() {
   return dataValue.value.value;
 }
 
-wss.on('connection', (ws) => {
-  console.log('Vue 클라이언트 연결됨');
+// PLC 데이터 수집 및 로깅
+async function startDataCollection() {
+  try {
+    const value = await readPLCData();
+    console.log(`[${new Date().toISOString()}] PLC 데이터: ${value}`);
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] 데이터 수집 오류: ${err.message}`);
+  }
+}
 
-  const interval = setInterval(async () => {
-    try {
-      const value = await readPLCData();
-      ws.send(JSON.stringify({ value }));
-    } catch (err) {
-      ws.send(JSON.stringify({ error: err.message }));
-    }
-  }, 1000); // 1초 주기
+// 1초마다 데이터 수집
+setInterval(startDataCollection, 1000);
 
-  ws.on('close', () => {
-    console.log('클라이언트 연결 종료');
-    clearInterval(interval);
-  });
+// 기본 라우트
+app.get('/', (req, res) => {
+  res.json({ message: 'Network Agents Server is running!' });
 });
 
-app.get('/', (req, res) => res.send('OPC UA WebSocket Server Running'));
-
-server.listen(3000, async () => {
+server.listen(port, async () => {
   await initOPCUA();
-  console.log('서버 실행 중: http://localhost:3000');
+  console.log(`Server is running on port ${port}`);
+  console.log('PLC 데이터 수집 시작...');
 });
