@@ -1,3 +1,4 @@
+// server.js
 const dgram = require('dgram');
 const server = dgram.createSocket('udp4');
 
@@ -10,12 +11,20 @@ server.on('listening', () => {
 });
 
 server.on('message', (msg, rinfo) => {
-  console.log(`📡 수신: ${rinfo.address}:${rinfo.port} → ${msg.length} bytes`);
-  console.log(msg.toString('hex').slice(0, 64)); // 일부 출력
+  console.log(`📡 ${rinfo.address}:${rinfo.port} → ${msg.length} bytes`);
+  console.log(`📦 데이터 일부: ${msg.toString('hex').slice(0, 64)}...`);
 });
 
 server.on('error', (err) => {
-  console.error(`❌ 에러 발생: ${err}`);
+  console.error(`❌ 서버 에러 발생: ${err.stack}`);
+  server.close();
 });
 
-server.bind(PORT, HOST);
+// 이 부분 중요: try/catch + 콜백 추가
+try {
+  server.bind(PORT, HOST, () => {
+    console.log(`🔗 바인딩 성공 → ${HOST}:${PORT}`);
+  });
+} catch (err) {
+  console.error(`❌ 바인딩 중 에러: ${err}`);
+}
