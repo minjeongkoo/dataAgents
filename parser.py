@@ -29,8 +29,9 @@ def parse_compact_packet(hex_str):
                 y = dist * np.sin(angle)
                 points.append({ "x": x, "y": y })
 
-        return { "points": points }
-
+        return { 
+            "points": points
+        }
     except Exception as e:
         # Print error to stderr (not stdout)
         sys.stderr.write(f"[parser.py] Parse error: {e}\n")
