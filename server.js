@@ -65,6 +65,7 @@ udpSocket.on('message', (msg) => {
   const parsed = parseCompactPacket(msg);
   if (parsed) {
     io.emit('scan', parsed);
+    console.log("Emitted", parsed.points.length, "points to client");
   }
 });
 
