@@ -1,5 +1,3 @@
-// ✅ SICK Compact Format UDP Parser + Visualization (Node.js + Web UI)
-
 const dgram = require('dgram');
 const express = require('express');
 const http = require('http');
@@ -17,6 +15,7 @@ app.get('/', (req, res) => {
   res.sendFile(__dirname + '/index.html');
 });
 
+// SICK Compact Format 정식 파서
 function parseCompactPacket(buffer) {
   if (buffer.length < 32) return null;
 
@@ -31,18 +30,17 @@ function parseCompactPacket(buffer) {
   const moduleSize = buffer.readUInt32LE(28);
   const moduleData = buffer.slice(32, 32 + moduleSize);
 
-  // 모듈 내 거리값 파싱 (초기 offset = 0)
   const layerCount = moduleData.readUInt8(0);
   const echoCount = moduleData.readUInt8(1);
   const scanPointCount = moduleData.readUInt16LE(2);
   const startAngleRaw = moduleData.readInt32LE(4);
   const angleStepRaw = moduleData.readUInt32LE(8);
+  const dataOffset = 12;
 
   if (scanPointCount === 0 || angleStepRaw === 0) return null;
 
   const startAngle = (startAngleRaw / 10000.0) * Math.PI / 180;
   const angleStep = (angleStepRaw / 10000.0) * Math.PI / 180;
-  const dataOffset = 12;
 
   const points = [];
 
@@ -62,6 +60,7 @@ function parseCompactPacket(buffer) {
   return { telegramCounter, timestamp, points };
 }
 
+// UDP 데이터 수신 → 파싱 → 브라우저 전송
 udpSocket.on('message', (msg) => {
   const parsed = parseCompactPacket(msg);
   if (parsed) {
