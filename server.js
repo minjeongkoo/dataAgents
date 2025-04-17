@@ -1,83 +1,34 @@
+// udp-logger.js
+
 const dgram = require('dgram');
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
 
-const UDP_PORT = 2115;
-const HOST = '169.254.199.100';
+// 1) 소켓 생성 ('udp4' 또는 'udp6')
+const socket = dgram.createSocket('udp4');
 
-const udpSocket = dgram.createSocket('udp4');
-const app = express();
-const httpServer = http.createServer(app);
-const io = new Server(httpServer);
+// 2) 바인딩할 호스트/IP와 포트
+const LISTEN_HOST = '0.0.0.0';     // 모든 인터페이스 수신
+const LISTEN_PORT = 2115;         // 예: 2115 포트로 수신
 
-app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/index.html');
+// 3) 소켓이 준비되면 출력
+socket.on('listening', () => {
+  const { address, port } = socket.address();
+  console.log(`[UDP] Listening on ${address}:${port}`);
 });
 
-io.on('connection', (socket) => {
-  console.log('WebSocket client connected');
+// 4) 패킷 수신 시 메시지와 rinfo 객체를 통해 발신지 정보 로깅
+socket.on('message', (msg, rinfo) => {
+  // rinfo.address, rinfo.port, rinfo.size (바이트 길이) 등이 포함됨
+  console.log(`[UDP] Received ${rinfo.size} bytes from ${rinfo.address}:${rinfo.port}`);
+  // 원시 데이터를 헥사 문자열 혹은 UTF-8로 출력
+  console.log(`[UDP] Data (hex): ${msg.toString('hex')}`);
+  // console.log(`[UDP] Data (utf8): ${msg.toString('utf8')}`);
 });
 
-
-// SICK Compact Format 정식 파서
-function parseCompactPacket(buffer) {
-  if (buffer.length < 32) return null;
-
-  const sof = buffer.readUInt32BE(0);
-  if (sof !== 0x02020202) return null;
-
-  const commandId = buffer.readUInt32LE(4);
-  if (commandId !== 1) return null;
-
-  const telegramCounter = Number(buffer.readBigUInt64LE(8));
-  const timestamp = Number(buffer.readBigUInt64LE(16));
-  const moduleSize = buffer.readUInt32LE(28);
-  const moduleData = buffer.slice(32, 32 + moduleSize);
-
-  const layerCount = moduleData.readUInt8(0);
-  const echoCount = moduleData.readUInt8(1);
-  const scanPointCount = moduleData.readUInt16LE(2);
-  const startAngleRaw = moduleData.readInt32LE(4);
-  const angleStepRaw = moduleData.readUInt32LE(8);
-  const dataOffset = 12;
-
-  if (scanPointCount === 0 || angleStepRaw === 0) return null;
-
-  const startAngle = (startAngleRaw / 10000.0) * Math.PI / 180;
-  const angleStep = (angleStepRaw / 10000.0) * Math.PI / 180;
-
-  const points = [];
-
-  for (let i = 0; i < scanPointCount; i++) {
-    const offset = dataOffset + i * 2;
-    if (offset + 2 > moduleData.length) break;
-
-    const dist = moduleData.readUInt16LE(offset);
-    if (dist > 0) {
-      const angle = startAngle + i * angleStep;
-      const x = dist * Math.cos(angle);
-      const y = dist * Math.sin(angle);
-      points.push({ x, y });
-    }
-  }
-
-  return { telegramCounter, timestamp, points };
-}
-
-// UDP 데이터 수신 → 파싱 → 브라우저 전송
-udpSocket.on('message', (msg) => {
-  const parsed = parseCompactPacket(msg);
-  if (parsed) {
-    io.emit('scan', parsed);
-    console.log("Emitted", parsed.points.length, "points to client");
-  }
+// 5) 에러 처리
+socket.on('error', (err) => {
+  console.error(`[UDP] Error: ${err.stack}`);
+  socket.close();
 });
 
-udpSocket.bind(UDP_PORT, HOST, () => {
-  console.log(`UDP listening on ${HOST}:${UDP_PORT}`);
-});
-
-httpServer.listen(3000, () => {
-  console.log('Web server running at http://localhost:3000');
-});
+// 6) 소켓 바인딩
+socket.bind(LISTEN_PORT, LISTEN_HOST);
