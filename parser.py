@@ -30,41 +30,54 @@ def parse_compact_packet(hex_str):
             
         raw = bytes.fromhex(actual_data)
 
+        # 헤더 구조 수정
         header_size = 32
-        module_offset = header_size
+        module_offset = 0  # 헤더 시작 위치 변경
 
         # Parse scan parameters
-        scan_point_count = struct.unpack_from('<H', raw, module_offset + 2)[0]
-        start_angle_raw = struct.unpack_from('<i', raw, module_offset + 4)[0]
-        angle_step_raw = struct.unpack_from('<I', raw, module_offset + 8)[0]
-        data_offset = module_offset + 12
+        try:
+            scan_point_count = struct.unpack_from('<H', raw, module_offset + 2)[0]
+            start_angle_raw = struct.unpack_from('<i', raw, module_offset + 4)[0]
+            angle_step_raw = struct.unpack_from('<I', raw, module_offset + 8)[0]
+            data_offset = module_offset + 12
 
-        sys.stderr.write(f"[parser.py] Scan parameters - Count: {scan_point_count}, Start angle: {start_angle_raw}, Step: {angle_step_raw}\n")
+            sys.stderr.write(f"[parser.py] Raw scan parameters - Count: {scan_point_count}, Start angle: {start_angle_raw}, Step: {angle_step_raw}\n")
 
-        start_angle = (start_angle_raw / 10000.0) * np.pi / 180  # radians
-        angle_step = (angle_step_raw / 10000.0) * np.pi / 180
+            # 값 검증
+            if scan_point_count == 0 or angle_step_raw == 0:
+                sys.stderr.write("[parser.py] Error: Invalid scan parameters\n")
+                return { "points": [] }
 
-        points = []
+            start_angle = (start_angle_raw / 10000.0) * np.pi / 180  # radians
+            angle_step = (angle_step_raw / 10000.0) * np.pi / 180
 
-        for i in range(scan_point_count):
-            try:
-                dist = struct.unpack_from('<H', raw, data_offset + i * 2)[0]
-                if dist > 0:
-                    angle = start_angle + i * angle_step
-                    x = dist * np.cos(angle)
-                    y = dist * np.sin(angle)
-                    points.append({ "x": float(x), "y": float(y) })
-            except struct.error as e:
-                sys.stderr.write(f"[parser.py] Error parsing point {i}: {e}\n")
-                continue
+            sys.stderr.write(f"[parser.py] Converted angles - Start: {start_angle}, Step: {angle_step}\n")
 
-        result = { 
-            "points": points
-        }
-        
-        # 디버깅을 위한 결과 출력
-        sys.stderr.write(f"[parser.py] Parsed {len(points)} points\n")
-        return result
+            points = []
+
+            for i in range(scan_point_count):
+                try:
+                    dist = struct.unpack_from('<H', raw, data_offset + i * 2)[0]
+                    if dist > 0:
+                        angle = start_angle + i * angle_step
+                        x = dist * np.cos(angle)
+                        y = dist * np.sin(angle)
+                        points.append({ "x": float(x), "y": float(y) })
+                except struct.error as e:
+                    sys.stderr.write(f"[parser.py] Error parsing point {i}: {e}\n")
+                    continue
+
+            result = { 
+                "points": points
+            }
+            
+            # 디버깅을 위한 결과 출력
+            sys.stderr.write(f"[parser.py] Parsed {len(points)} points\n")
+            return result
+
+        except struct.error as e:
+            sys.stderr.write(f"[parser.py] Struct error: {str(e)}\n")
+            return { "points": [] }
         
     except Exception as e:
         # Print error to stderr (not stdout)

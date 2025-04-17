@@ -28,13 +28,19 @@ python.stdin.on('error', err => {
 });
 
 python.stdout.on('data', data => {
-  try {
-    const parsed = JSON.parse(data.toString());
-    io.emit('scan', parsed);
-  } catch (e) {
-    console.error('Failed to parse Python output:', e.message);
+  const lines = data.toString().split(/\r?\n/);
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    console.log(">>> LINE FROM PYTHON:", JSON.stringify(line));  // 여기에 문제 있는 줄이 있을 수 있음
+    try {
+      const parsed = JSON.parse(line);
+      io.emit('scan', parsed);
+    } catch (e) {
+      console.error('Failed to parse Python output:', e.message);
+    }
   }
 });
+
 
 udp.on('message', (msg) => {
   python.stdin.write(msg.toString('hex') + '\n');
