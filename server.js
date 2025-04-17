@@ -15,6 +15,11 @@ app.get('/', (req, res) => {
   res.sendFile(__dirname + '/index.html');
 });
 
+io.on('connection', (socket) => {
+  console.log('WebSocket client connected');
+});
+
+
 // SICK Compact Format 정식 파서
 function parseCompactPacket(buffer) {
   if (buffer.length < 32) return null;
