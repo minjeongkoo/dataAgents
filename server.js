@@ -4,7 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 
 const UDP_PORT = 2115;
-const HOST = '0.0.0.0';
+const HOST = '169.254.199.100';
 
 const udpSocket = dgram.createSocket('udp4');
 const app = express();
