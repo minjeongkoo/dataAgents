@@ -32,6 +32,7 @@
     const socket = io();
     socket.on('scan', (data) => {
       console.log("Received points:", data.points.length);
+      console.log(`Received ${data.points.length} points`);
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -47,9 +48,11 @@
       ctx.fillStyle = 'lime';
       data.points.forEach(p => {
         const x = cx + p.x * scale;
-        const y = cy - p.y * scale; // y축 반전
+        const y = cy - p.y * scale;
+        ctx.fillStyle = 'lime';
+        
         ctx.beginPath();
-        ctx.arc(x, y, 1.5, 0, 2 * Math.PI);
+        ctx.arc(x, y, 1.5, 0, Math.PI * 2);
         ctx.fill();
       });
     });
