@@ -28,9 +28,11 @@ def parse_compact_packet(hex_str):
 
         return points
     except Exception as e:
+        sys.stderr.write(f"Parsing error: {str(e)}\n")
         return []
 
 if __name__ == "__main__":
     for line in sys.stdin:
         result = parse_compact_packet(line)
-        print(json.dumps({ "points": result }), flush=True)
+        sys.stdout.write(json.dumps({ "points": result }) + '\n')
+        sys.stdout.flush()
