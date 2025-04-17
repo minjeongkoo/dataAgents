@@ -2,34 +2,31 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>SICK LiDAR Visualization</title>
+  <title>LiDAR Viewer</title>
   <style>
-    canvas { background: #111; display: block; margin: 0 auto; }
+    canvas { background: black; display: block; margin: 0 auto; }
   </style>
 </head>
 <body>
-  <canvas id="lidar" width="800" height="800"></canvas>
+  <canvas id="canvas" width="800" height="800"></canvas>
   <script src="/socket.io/socket.io.js"></script>
   <script>
-    const canvas = document.getElementById('lidar');
+    const socket = io();
+    const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
-    const ioSocket = io();
+    const scale = 0.05;
 
-    ioSocket.on('scan', data => {
+    socket.on('scan', (data) => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const centerX = canvas.width / 2;
-      const centerY = canvas.height / 2;
-      const scale = 0.05;
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
 
-      data.distances.forEach((d, i) => {
-        const angle = (i / data.distances.length) * 2 * Math.PI;
-        const r = d * scale;
-        const x = centerX + r * Math.cos(angle);
-        const y = centerY + r * Math.sin(angle);
-
-        ctx.beginPath();
-        ctx.arc(x, y, 2, 0, 2 * Math.PI);
+      data.points.forEach(p => {
+        const x = cx + p.x * scale;
+        const y = cy + p.y * scale;
         ctx.fillStyle = 'lime';
+        ctx.beginPath();
+        ctx.arc(x, y, 1.5, 0, Math.PI * 2);
         ctx.fill();
       });
     });
