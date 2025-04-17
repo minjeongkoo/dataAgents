@@ -6,7 +6,7 @@ const dgram = require('dgram');
 const socket = dgram.createSocket('udp4');
 
 // 2) 바인딩할 호스트/IP와 포트
-const LISTEN_HOST = '0.0.0.0';     // 모든 인터페이스 수신
+const LISTEN_HOST = '169.254.199.194';     // 모든 인터페이스 수신
 const LISTEN_PORT = 2115;         // 예: 2115 포트로 수신
 
 // 3) 소켓이 준비되면 출력
