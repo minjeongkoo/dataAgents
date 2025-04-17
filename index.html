@@ -1,15 +1,26 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <meta charset="UTF-8">
   <title>LiDAR Viewer</title>
   <style>
-    body { margin: 0; background: black; }
-    canvas { display: block; margin: auto; background: #000; }
+    body {
+      margin: 0;
+      background: black;
+    }
+
+    canvas {
+      display: block;
+      margin: auto;
+      background: #000;
+    }
   </style>
 </head>
+
 <body>
   <canvas id="lidar" width="800" height="800"></canvas>
+  <pre id="log" style="color: lime; background: black; padding: 10px; height: 200px; overflow-y: scroll;"></pre>
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const canvas = document.getElementById('lidar');
@@ -42,6 +53,24 @@
         ctx.fill();
       });
     });
+
+    const logElement = document.getElementById("log");
+
+    function log(message) {
+      const now = new Date().toLocaleTimeString();
+      logElement.textContent += `[${now}] ${message}\n`;
+      logElement.scrollTop = logElement.scrollHeight;
+    }
+
+    socket.on('connect', () => {
+      log("WebSocket connected");
+    });
+
+    socket.on('scan', (data) => {
+      log(`Received ${data.points.length} points`);
+    });
+
   </script>
 </body>
+
 </html>
