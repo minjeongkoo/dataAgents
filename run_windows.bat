@@ -1,9 +1,23 @@
 @echo off
-echo [Windows] Node.js 서버 실행 중...
-start "" /B node server.js
 
-echo Python 파서 실행 중...
-start "" /B python parser.py
+REM Check if matplotlib is installed
+python -c "import matplotlib" 2>NUL
+IF ERRORLEVEL 1 (
+  echo matplotlib is not installed.
+  echo Installing dependencies: matplotlib and numpy...
+  python -m pip install matplotlib numpy
+  IF ERRORLEVEL 1 (
+    echo Dependency installation failed. Aborting.
+    pause
+    exit /B
+  )
+)
 
-echo 모든 서비스 실행 완료!
+echo Starting Node.js server...
+start "" node server.js
+
+echo Starting Python parser...
+start "" python parser.py
+
+echo All services started successfully.
 pause
