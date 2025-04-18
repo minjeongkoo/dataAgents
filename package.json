@@ -1,6 +1,7 @@
 {
   "name": "network-agents",
   "version": "1.0.0",
+  "type": "module", 
   "description": "Network Agents Server",
   "main": "server.js",
   "scripts": {
