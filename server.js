@@ -33,7 +33,13 @@ udpSocket.on('message', (msg, rinfo) => {
   console.log(`[UDP] Message from ${rinfo.address}:${rinfo.port} (${msg.length} bytes)`);
 
   const points = parseCompactFormat(msg);
-  console.log(`[WebSocket] Sending ${points.length} points`);
+
+  if (points.length > 0) {
+    console.log(`[WebSocket] Sending ${points.length} points`);
+    console.log(`[WebSocket] Example point:`, points[0]);
+  } else {
+    console.log(`[WebSocket] Sending 0 points`);
+  }
 
   io.emit('lidar-points', points);
 });
