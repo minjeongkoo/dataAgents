@@ -7,13 +7,11 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// UDP 소켓
+// 서버 생성
 const udpSocket = dgram.createSocket('udp4');
-
-// HTTP + WebSocket 서버
 const server = http.createServer((req, res) => {
   if (req.url === '/') {
-    const html = fs.readFileSync(path.join(__dirname, 'index.html'));
+    const html = fs.readFileSync(path.join(__dirname, 'index_3d.html'));
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(html);
   }
@@ -25,31 +23,56 @@ wss.on('connection', (ws) => {
   console.log('WebSocket client connected');
 });
 
-// UDP 수신
+// 기본 세팅 (예시)
+const PhiFirstDeg = -30;  // 장비 세팅 기준
+const PhiLastDeg = 30;
+
 udpSocket.on('message', (msg, rinfo) => {
   if (msg.length < 32) return;
+
   const modules = parseModules(msg.slice(32));
 
   modules.forEach(module => {
-    const points = module.distances.map((d, i) => ({
-      distance: d,
-      rssi: module.rssi[i]
-    }));
+    const points = [];
+    const numLines = module.numLines;
+    const numBeams = module.numBeams;
 
+    if (numBeams === 0 || numLines === 0) return; // 보호
+
+    module.distances.forEach((d, idx) => {
+      if (d <= 0 || d > 20000) return; // 무효 거리 필터
+
+      const beamIdx = idx % numBeams;
+      const lineIdx = Math.floor(idx / numBeams);
+
+      const thetaDeg = 360 * (beamIdx / numBeams);
+      const phiDeg = PhiFirstDeg + (PhiLastDeg - PhiFirstDeg) * (lineIdx / Math.max(1, numLines - 1));
+
+      const theta = thetaDeg * (Math.PI / 180);
+      const phi = phiDeg * (Math.PI / 180);
+
+      const x = d * Math.cos(phi) * Math.cos(theta);
+      const y = d * Math.cos(phi) * Math.sin(theta);
+      const z = d * Math.sin(phi);
+
+      points.push({ x, y, z });
+    });
+
+    // WebSocket 전송
     wss.clients.forEach(client => {
-      if (client.readyState === 1) { // WebSocket.OPEN
+      if (client.readyState === 1) {
         client.send(JSON.stringify(points));
       }
     });
   });
 });
 
-udpSocket.bind(2115);
+udpSocket.bind(12345);
 server.listen(3000, () => {
-  console.log('HTTP/WebSocket server running on http://localhost:3000');
+  console.log('HTTP/WebSocket 3D server running on http://localhost:3000');
 });
 
-// ----------------- 모듈 파싱 함수 ------------------
+// ----------------- 모듈 파싱 ------------------
 function parseModules(buffer) {
   const modules = [];
   let offset = 0;
@@ -57,9 +80,10 @@ function parseModules(buffer) {
   while (offset < buffer.length) {
     if (offset + 84 > buffer.length) break;
 
-    const numberOfLines = buffer.readUInt32LE(offset + 20);
-    const numberOfBeams = buffer.readUInt32LE(offset + 24);
-    const numberOfEchos = buffer.readUInt32LE(offset + 28);
+    const numLines = buffer.readUInt32LE(offset + 20);
+    const numBeams = buffer.readUInt32LE(offset + 24);
+    const numEchos = buffer.readUInt32LE(offset + 28);
+
     const dataContentEchos = buffer.readUInt8(offset + 82);
     const dataContentBeams = buffer.readUInt8(offset + 83);
 
@@ -76,28 +100,25 @@ function parseModules(buffer) {
     const tupleSizePerEcho = echoFields.length * 2;
     const tupleSizePerBeam = beamFields.reduce((sum, field) => sum + (field === 'property' ? 1 : 2), 0);
 
-    const tupleSize = numberOfEchos * tupleSizePerEcho + tupleSizePerBeam;
+    const tupleSize = numEchos * tupleSizePerEcho + tupleSizePerBeam;
 
-    const totalTuples = numberOfLines * numberOfBeams;
+    const totalTuples = numLines * numBeams;
     const expectedMeasurementSize = totalTuples * tupleSize;
 
     if (measurementStart + expectedMeasurementSize > buffer.length) break;
 
     const distances = [];
-    const rssi = [];
     let pointer = measurementStart;
 
-    for (let beamIdx = 0; beamIdx < numberOfBeams; beamIdx++) {
-      for (let lineIdx = 0; lineIdx < numberOfLines; lineIdx++) {
-        for (let echoIdx = 0; echoIdx < numberOfEchos; echoIdx++) {
+    for (let beamIdx = 0; beamIdx < numBeams; beamIdx++) {
+      for (let lineIdx = 0; lineIdx < numLines; lineIdx++) {
+        for (let echoIdx = 0; echoIdx < numEchos; echoIdx++) {
           if (echoFields.includes('distance')) {
             const rawDistance = buffer.readUInt16LE(pointer);
             distances.push(rawDistance);
             pointer += 2;
           }
           if (echoFields.includes('rssi')) {
-            const rawRssi = buffer.readUInt16LE(pointer);
-            rssi.push(rawRssi);
             pointer += 2;
           }
         }
@@ -108,7 +129,7 @@ function parseModules(buffer) {
       }
     }
 
-    modules.push({ distances, rssi });
+    modules.push({ distances, numLines, numBeams });
 
     const nextModuleSize = buffer.readUInt32LE(offset + 80);
     if (nextModuleSize === 0) break;

@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Live Distance vs RSSI (Color by Distance)</title>
+  <title>Live 3D Lidar Point Cloud</title>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
-  <h2>Live Distance vs RSSI (Distance-based Color)</h2>
+  <h2>Live 3D Lidar Point Cloud</h2>
   <div id="plot" style="width: 100%; height: 90vh;"></div>
 
   <script>
@@ -18,37 +18,29 @@
 
     socket.onmessage = (event) => {
       const points = JSON.parse(event.data);
-
-      const distances = [];
-      const rssi = [];
-      const colors = [];
-
-      points.forEach(p => {
-        if (p.distance > 0 && p.distance < 20000) { // 0 ~ 20m 필터
-          distances.push(p.distance);
-          rssi.push(p.rssi);
-
-          // 거리별 색상 설정 (파랑 → 빨강 그라데이션)
-          const normalized = Math.min(p.distance / 20000, 1); // 0.0 ~ 1.0 사이로 정규화
-          const r = Math.floor(255 * normalized);
-          const b = Math.floor(255 * (1 - normalized));
-          const color = `rgb(${r},0,${b})`;
-          colors.push(color);
-        }
-      });
+      const x = points.map(p => p.x);
+      const y = points.map(p => p.y);
+      const z = points.map(p => p.z);
 
       Plotly.newPlot('plot', [{
-        x: distances,
-        y: rssi,
+        x: x,
+        y: y,
+        z: z,
         mode: 'markers',
+        type: 'scatter3d',
         marker: {
-          size: 6,
-          color: colors,
+          size: 2,
+          color: z,
+          colorscale: 'Viridis',
+          opacity: 0.8
         }
       }], {
-        title: 'Distance (mm) vs RSSI',
-        xaxis: { title: 'Distance (mm)', range: [0, 20000] },
-        yaxis: { title: 'RSSI' },
+        title: '3D Lidar Point Cloud',
+        scene: {
+          xaxis: { title: 'X (mm)' },
+          yaxis: { title: 'Y (mm)' },
+          zaxis: { title: 'Z (mm)' }
+        },
         margin: { t: 40 }
       });
     };
