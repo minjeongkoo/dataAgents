@@ -2,15 +2,55 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Live 3D Lidar Point Cloud</title>
+  <title>Live 3D Lidar Point Cloud (Improved)</title>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
-  <h2>Live 3D Lidar Point Cloud</h2>
+  <h2>Live 3D Lidar Point Cloud (Smooth)</h2>
   <div id="plot" style="width: 100%; height: 90vh;"></div>
 
   <script>
     const socket = new WebSocket('ws://' + location.host);
+
+    let layout = {
+      title: '3D Lidar Point Cloud',
+      scene: {
+        xaxis: { title: 'X (mm)' },
+        yaxis: { title: 'Y (mm)' },
+        zaxis: { title: 'Z (mm)' }
+      },
+      margin: { t: 40 }
+    };
+
+    let lidarPoint = {
+      x: [0],
+      y: [0],
+      z: [0],
+      mode: 'markers',
+      type: 'scatter3d',
+      marker: {
+        size: 5,
+        color: 'black'
+      },
+      name: 'Lidar Position'
+    };
+
+    let lidarData = [lidarPoint, {
+      x: [],
+      y: [],
+      z: [],
+      mode: 'markers',
+      type: 'scatter3d',
+      marker: {
+        size: 2,
+        color: [],
+        colorscale: 'Viridis',
+        opacity: 0.8
+      },
+      name: 'Points'
+    }];
+
+    Plotly.newPlot('plot', lidarData, layout);
 
     socket.onopen = () => {
       console.log('WebSocket connected.');
@@ -22,27 +62,12 @@
       const y = points.map(p => p.y);
       const z = points.map(p => p.z);
 
-      Plotly.newPlot('plot', [{
-        x: x,
-        y: y,
-        z: z,
-        mode: 'markers',
-        type: 'scatter3d',
-        marker: {
-          size: 2,
-          color: z,
-          colorscale: 'Viridis',
-          opacity: 0.8
-        }
-      }], {
-        title: '3D Lidar Point Cloud',
-        scene: {
-          xaxis: { title: 'X (mm)' },
-          yaxis: { title: 'Y (mm)' },
-          zaxis: { title: 'Z (mm)' }
-        },
-        margin: { t: 40 }
-      });
+      lidarData[1].x = x;
+      lidarData[1].y = y;
+      lidarData[1].z = z;
+      lidarData[1].marker.color = z; // Z축 높이에 따라 색깔 매핑
+
+      Plotly.react('plot', lidarData, layout); // 🚀 react() 사용으로 부드럽게
     };
 
     socket.onclose = () => {
