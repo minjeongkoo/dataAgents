@@ -34,7 +34,7 @@ socket.on('error', (err) => {
 });
 
 // 바인딩
-const LOCAL_PORT = 12345;
+const LOCAL_PORT = 2115;
 socket.bind(LOCAL_PORT, '0.0.0.0', () => {
   console.log(`Listening for UDP packets on 0.0.0.0:${LOCAL_PORT}`);
 });
