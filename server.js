@@ -1,140 +1,100 @@
 import dgram from 'dgram';
-import { WebSocketServer } from 'ws';
+import express from 'express';
 import http from 'http';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { Server } from 'socket.io';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const UDP_PORT = 2115;    // UDP 수신 포트 (라이다)
+const WS_PORT = 3000;     // WebSocket 제공 포트 (브라우저)
 
-// 서버 생성
+// multiScan100 기본 빔 수직각 (deg)
+const beamAnglesDeg = [
+  -15.0, -13.7, -12.3, -11.0, -9.6, -8.3,
+  -7.0, -5.6, -4.3, -2.9, -1.6, -0.2,
+   1.1,  2.5,  3.8,  5.2,  6.5,  7.9,
+   9.2, 10.6, 11.9, 13.3, 14.6, 16.0
+];
+
+// 한 바퀴 회전 시간 (10Hz → 100ms)
+const ROTATION_PERIOD_MS = 100;
+
 const udpSocket = dgram.createSocket('udp4');
-const server = http.createServer((req, res) => {
-  if (req.url === '/') {
-    const html = fs.readFileSync(path.join(__dirname, 'index.html'));
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(html);
-  }
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+
+// WebSocket 서버 연결
+io.on('connection', (socket) => {
+  console.log('[WS] Client connected');
 });
 
-const wss = new WebSocketServer({ server });
-
-wss.on('connection', (ws) => {
-  console.log('WebSocket client connected');
-});
-
-// 기본 세팅 (예시)
-const PhiFirstDeg = -30;  // 장비 세팅 기준
-const PhiLastDeg = 30;
-
+// UDP 데이터 수신
 udpSocket.on('message', (msg, rinfo) => {
-  if (msg.length < 32) return;
+  console.log(`[UDP] Message from ${rinfo.address}:${rinfo.port} (${msg.length} bytes)`);
 
-  const modules = parseModules(msg.slice(32));
+  const points = parseCompactFormat(msg);
 
-  modules.forEach(module => {
-    const points = [];
-    const numLines = module.numLines;
-    const numBeams = module.numBeams;
-
-    if (numBeams === 0 || numLines === 0) return; // 보호
-
-    module.distances.forEach((d, idx) => {
-      if (d <= 0 || d > 20000) return; // 무효 거리 필터
-
-      const beamIdx = idx % numBeams;
-      const lineIdx = Math.floor(idx / numBeams);
-
-      const thetaDeg = 360 * (beamIdx / numBeams);
-      const phiDeg = PhiFirstDeg + (PhiLastDeg - PhiFirstDeg) * (lineIdx / Math.max(1, numLines - 1));
-
-      const theta = thetaDeg * (Math.PI / 180);
-      const phi = phiDeg * (Math.PI / 180);
-
-      const x = d * Math.cos(phi) * Math.cos(theta);
-      const y = d * Math.cos(phi) * Math.sin(theta);
-      const z = d * Math.sin(phi);
-
-      points.push({ x, y, z });
-    });
-
-    // WebSocket 전송
-    wss.clients.forEach(client => {
-      if (client.readyState === 1) {
-        client.send(JSON.stringify(points));
-      }
-    });
-  });
+  if (points.length > 0) {
+    io.emit('lidar-points', points); // WebSocket으로 브라우저에 전달
+  }
 });
 
-udpSocket.bind(2115);
-server.listen(3000, () => {
-  console.log('HTTP/WebSocket 3D server running on http://localhost:3000');
+// UDP, WS 서버 시작
+udpSocket.bind(UDP_PORT);
+server.listen(WS_PORT, () => {
+  console.log(`[HTTP/WS] Server running at http://localhost:${WS_PORT}`);
 });
 
-// ----------------- 모듈 파싱 ------------------
-function parseModules(buffer) {
-  const modules = [];
-  let offset = 0;
 
-  while (offset < buffer.length) {
-    if (offset + 84 > buffer.length) break;
+// ===== 핵심: Compact Format 파싱 함수 =====
 
-    const numLines = buffer.readUInt32LE(offset + 20);
-    const numBeams = buffer.readUInt32LE(offset + 24);
-    const numEchos = buffer.readUInt32LE(offset + 28);
+function parseCompactFormat(buffer) {
+  const points = [];
 
-    const dataContentEchos = buffer.readUInt8(offset + 82);
-    const dataContentBeams = buffer.readUInt8(offset + 83);
+  // 최소 길이 체크 (헤더 + 모듈 데이터)
+  if (buffer.length < 32) return points;
 
-    const measurementStart = offset + 84;
+  const sof = buffer.readUInt32BE(0);
+  if (sof !== 0x02020202) return points; // Compact Format Start 검증
 
-    const echoFields = [];
-    if (dataContentEchos & 0b00000001) echoFields.push('distance');
-    if (dataContentEchos & 0b00000010) echoFields.push('rssi');
+  const telegramCounter = buffer.readBigUInt64LE(8);
+  const timestamp = Number(buffer.readBigUInt64LE(16)); // ns 단위
 
-    const beamFields = [];
-    if (dataContentBeams & 0b00000001) beamFields.push('property');
-    if (dataContentBeams & 0b00000010) beamFields.push('theta');
+  // Compact Format은 헤더 이후 모듈로 이어짐
+  const moduleOffset = 32;
 
-    const tupleSizePerEcho = echoFields.length * 2;
-    const tupleSizePerBeam = beamFields.reduce((sum, field) => sum + (field === 'property' ? 1 : 2), 0);
+  // 여기선 간단히 Distance와 RSSI만 파싱 (예시로 Distance만)
+  const numChannels = buffer.readUInt32LE(moduleOffset);
+  const channelDataOffset = moduleOffset + 4;
 
-    const tupleSize = numEchos * tupleSizePerEcho + tupleSizePerBeam;
+  const distanceData = [];
+  const distanceStartOffset = channelDataOffset + 24; // 디폴트 위치
 
-    const totalTuples = numLines * numBeams;
-    const expectedMeasurementSize = totalTuples * tupleSize;
-
-    if (measurementStart + expectedMeasurementSize > buffer.length) break;
-
-    const distances = [];
-    let pointer = measurementStart;
-
-    for (let beamIdx = 0; beamIdx < numBeams; beamIdx++) {
-      for (let lineIdx = 0; lineIdx < numLines; lineIdx++) {
-        for (let echoIdx = 0; echoIdx < numEchos; echoIdx++) {
-          if (echoFields.includes('distance')) {
-            const rawDistance = buffer.readUInt16LE(pointer);
-            distances.push(rawDistance);
-            pointer += 2;
-          }
-          if (echoFields.includes('rssi')) {
-            pointer += 2;
-          }
-        }
-        for (const field of beamFields) {
-          if (field === 'property') pointer += 1;
-          else if (field === 'theta') pointer += 2;
-        }
-      }
-    }
-
-    modules.push({ distances, numLines, numBeams });
-
-    const nextModuleSize = buffer.readUInt32LE(offset + 80);
-    if (nextModuleSize === 0) break;
-    offset += nextModuleSize;
+  // Distance 데이터 읽기 (float32)
+  for (let i = 0; i < numChannels; i++) {
+    const dist = buffer.readFloatLE(distanceStartOffset + i * 4);
+    distanceData.push(dist); // mm
   }
 
-  return modules;
+  // === Distance 데이터로 포인트 변환 ===
+
+  // 현재 스캔 각도 (timestamp 기준으로 phi 계산)
+  const timestampMs = timestamp / 1e6; // ns → ms 변환
+  const phiDeg = (timestampMs % ROTATION_PERIOD_MS) / ROTATION_PERIOD_MS * 360;
+  const phiRad = phiDeg * Math.PI / 180;
+
+  for (let beamId = 0; beamId < beamAnglesDeg.length; beamId++) {
+    const thetaDeg = beamAnglesDeg[beamId];
+    const thetaRad = thetaDeg * Math.PI / 180;
+
+    const r = distanceData[beamId]; // Beam 별 Distance
+    if (r <= 0 || r > 120000) continue; // 0이나 비정상 거리 필터
+
+    const x = r * Math.cos(thetaRad) * Math.cos(phiRad);
+    const y = r * Math.cos(thetaRad) * Math.sin(phiRad);
+    const z = r * Math.sin(thetaRad);
+
+    points.push({ x, y, z });
+  }
+
+  return points;
 }
