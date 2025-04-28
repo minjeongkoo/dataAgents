@@ -53,9 +53,12 @@ httpServer.listen(HTTP_PORT, () => {
 function parseCompactFormat(buffer) {
   let offset = 0;
 
+  const startOfFrame = buffer.readUInt32BE(offset); offset += 4;
+  const commandId = buffer.readUInt32LE(offset); offset += 4;
   const segmentCounter = buffer.readBigUInt64LE(offset); offset += 8;
-  const frameNumber = buffer.readBigUInt64LE(offset); offset += 8;
-  const senderId = buffer.readUInt32LE(offset); offset += 4;
+  const timeStampTransmit = buffer.readBigUInt64LE(offset); offset += 8;
+  const telegramVersion = buffer.readUInt32LE(offset); offset += 4;
+  const sizeModule0 = buffer.readUInt32LE(offset); offset += 4;
 
   const numberOfLinesInModule = buffer.readUInt32LE(offset); offset += 4;
   const numberOfBeamsPerScan = buffer.readUInt32LE(offset); offset += 4;
@@ -65,7 +68,6 @@ function parseCompactFormat(buffer) {
   console.log('  numberOfLinesInModule:', numberOfLinesInModule);
   console.log('  numberOfBeamsPerScan:', numberOfBeamsPerScan);
   console.log('  numberOfEchosPerBeam:', numberOfEchosPerBeam);
-
 
   const timeStampStart = [];
   for (let i = 0; i < numberOfLinesInModule; i++) {
@@ -126,7 +128,7 @@ function parseCompactFormat(buffer) {
       const y = distance * Math.cos(phi) * Math.sin(theta);
       const z = distance * Math.sin(phi);
 
-      if (distance > 100 && distance < 120000) { // 10cm ~ 120m 범위만 허용
+      if (distance > 100 && distance < 120000) {
         points.push({ x, y, z });
       }
     }
