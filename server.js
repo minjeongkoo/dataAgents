@@ -67,7 +67,7 @@ udpSocket.on('message', (msg, rinfo) => {
   });
 });
 
-udpSocket.bind(12345);
+udpSocket.bind(2115);
 server.listen(3000, () => {
   console.log('HTTP/WebSocket 3D server running on http://localhost:3000');
 });
