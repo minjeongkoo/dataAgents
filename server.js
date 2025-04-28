@@ -3,6 +3,7 @@ import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
 
+
 const UDP_PORT = 2115;    // UDP 수신 포트 (라이다)
 const WS_PORT = 3000;     // WebSocket 제공 포트 (브라우저)
 
@@ -21,6 +22,9 @@ const udpSocket = dgram.createSocket('udp4');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+
+app.use(express.static('public'));
+
 
 // WebSocket 서버 연결
 io.on('connection', (socket) => {
