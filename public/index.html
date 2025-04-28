@@ -17,8 +17,11 @@
     // Socket.IO 연결
     const socket = io();
 
+    
+
     socket.on('lidar-points', (points) => {
       console.log('[Browser] Received points:', points.length);
+      console.log('[Browser] Example point:', points[0]);
 
       if (points.length === 0) return;
 
