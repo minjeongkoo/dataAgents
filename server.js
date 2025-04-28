@@ -25,7 +25,6 @@ const io = new Server(server);
 
 app.use(express.static('public'));
 
-
 // WebSocket 서버 연결
 io.on('connection', (socket) => {
   console.log('[WS] Client connected');
