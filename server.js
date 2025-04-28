@@ -6,22 +6,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const UDP_PORT = 2115;
-const UDP_HOST = '0.0.0.0'; // 모든 IP 수신
+const UDP_HOST = '0.0.0.0';
 const HTTP_PORT = 3000;
 
-// __dirname 설정 (ESM 지원용)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// UDP 소켓 생성
 const udpSocket = dgram.createSocket('udp4');
-
-// Express 웹 서버 생성
 const app = express();
 const httpServer = http.createServer(app);
 const io = new Server(httpServer);
 
-// Static 파일 서빙 (public 폴더)
 app.use(express.static(path.join(__dirname, 'public')));
 
 udpSocket.on('listening', () => {
@@ -46,7 +41,6 @@ udpSocket.on('message', (msg, rinfo) => {
 
 udpSocket.bind(UDP_PORT, UDP_HOST);
 
-// 웹소켓 연결
 io.on('connection', (socket) => {
   console.log('[WebSocket] Client connected');
 });
@@ -55,19 +49,17 @@ httpServer.listen(HTTP_PORT, () => {
   console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
 });
 
-// Compact Format 파서
+// 🛠️ 순수 파싱만 하는 Compact Format 파서
 function parseCompactFormat(buffer) {
   let offset = 0;
 
-  // === Compact Frame Header (고정) ===
   const startOfFrame = buffer.readUInt32BE(offset); offset += 4;
   const commandId = buffer.readUInt32LE(offset); offset += 4;
   const telegramCounter = buffer.readBigUInt64LE(offset); offset += 8;
   const timeStampTransmit = buffer.readBigUInt64LE(offset); offset += 8;
   const telegramVersion = buffer.readUInt32LE(offset); offset += 4;
-  const payloadSize = buffer.readUInt32LE(offset); offset += 4; // == SizeModule0
+  const payloadSize = buffer.readUInt32LE(offset); offset += 4;
 
-  // === Module Header ===
   const numberOfLinesInModule = buffer.readUInt32LE(offset); offset += 4;
   const numberOfBeamsPerScan = buffer.readUInt32LE(offset); offset += 4;
   const numberOfEchosPerBeam = buffer.readUInt32LE(offset); offset += 4;
@@ -76,8 +68,7 @@ function parseCompactFormat(buffer) {
   console.log(`  numberOfLinesInModule: ${numberOfLinesInModule}`);
   console.log(`  numberOfBeamsPerScan: ${numberOfBeamsPerScan}`);
   console.log(`  numberOfEchosPerBeam: ${numberOfEchosPerBeam}`);
-  console.log(`[WebSocket] Sending ${points.length} points`);
-  
+
   const timeStampStart = [];
   for (let i = 0; i < numberOfLinesInModule; i++) {
     timeStampStart.push(buffer.readBigUInt64LE(offset));
