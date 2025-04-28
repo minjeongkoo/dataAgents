@@ -11,7 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const udpSocket = dgram.createSocket('udp4');
 const server = http.createServer((req, res) => {
   if (req.url === '/') {
-    const html = fs.readFileSync(path.join(__dirname, 'index_3d.html'));
+    const html = fs.readFileSync(path.join(__dirname, 'index.html'));
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(html);
   }
