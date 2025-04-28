@@ -1,79 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
-  <title>Live 3D Lidar Point Cloud (Final)</title>
-  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <title>multiScan100 Viewer</title>
+  <script src="/socket.io/socket.io.js"></script> <!-- ✅ Socket.IO 클라이언트 스크립트 추가 -->
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script> <!-- ✅ Plotly.js -->
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #chart { width: 100vw; height: 100vh; }
+  </style>
 </head>
-
 <body>
-  <h2>Live 3D Lidar Point Cloud (Smooth)</h2>
-  <div id="plot" style="width: 100%; height: 90vh;"></div>
+  <div id="chart"></div>
 
   <script>
-    const socket = new WebSocket('ws://' + location.hostname + ':3000'); // 서버 3000포트로 WebSocket 연결
-
-    let layout = {
-      title: '3D Lidar Point Cloud',
-      showlegend: false,        // 🔥 범례 끔
-      scene: {
-        xaxis: {
-          title: 'X (mm)',
-          range: [-20000, 20000],  // X축 고정
-        },
-        yaxis: {
-          title: 'Y (mm)',
-          range: [-20000, 20000],  // Y축 고정
-        },
-        zaxis: {
-          title: 'Z (mm)',
-          range: [-5000, 5000],    // Z축 고정
-        },
-        aspectmode: 'manual',      // 비율 고정
-        aspectratio: { x: 1, y: 1, z: 0.5 }  // XYZ 비율 조정
-      },
-      margin: { t: 40 }
-    };
-
-    let lidarPoint = {
-      x: [0],
-      y: [0],
-      z: [0],
-      mode: 'markers',
-      type: 'scatter3d',
-      marker: {
-        size: 5,
-        color: 'black'
-      },
-      name: 'Lidar Position'
-    };
-
-    let lidarData = [
-      lidarPoint, // 0,0,0에 라이다 위치 고정 점
-      {
-        x: [],
-        y: [],
-        z: [],
-        mode: 'markers',
-        type: 'scatter3d',
-        marker: {
-          size: 2,
-          color: [],
-          colorscale: 'Viridis',
-          opacity: 0.8
-        },
-        name: 'Points'
-      }
-    ];
-
-    Plotly.newPlot('plot', lidarData, layout);
-
-    socket.onopen = () => {
-      console.log('WebSocket connected.');
-    };
+    // Socket.IO 연결
+    const socket = io();
 
     socket.on('lidar-points', (points) => {
+      console.log('[Browser] Received points:', points.length);
+
+      if (points.length === 0) return;
+
       const x = points.map(p => p.x);
       const y = points.map(p => p.y);
       const z = points.map(p => p.z);
@@ -86,41 +34,36 @@
         type: 'scatter3d',
         marker: {
           size: 2,
-          color: 'rgb(0, 255, 0)',
+          color: z,
+          colorscale: 'Jet', // ✅ z값 기준으로 컬러맵
+          cmin: -10000,
+          cmax: 10000,
+          showscale: false
         }
       };
 
-      Plotly.react('chart', [trace], {
-        margin: { l: 0, r: 0, b: 0, t: 0 },
+      const lidarOrigin = {
+        x: [0],
+        y: [0],
+        z: [0],
+        mode: 'markers',
+        type: 'scatter3d',
+        marker: {
+          size: 5,
+          color: 'black'
+        }
+      };
+
+      Plotly.react('chart', [trace, lidarOrigin], {
+        margin: {l: 0, r: 0, b: 0, t: 0},
         scene: {
-          xaxis: { range: [-30000, 30000] },
-          yaxis: { range: [-30000, 30000] },
-          zaxis: { range: [-30000, 30000] },
+          xaxis: {range: [-30000, 30000]},
+          yaxis: {range: [-30000, 30000]},
+          zaxis: {range: [-30000, 30000]},
+          aspectmode: 'data' // ✅ x,y,z 비율 고정
         }
       });
     });
-
-
-    socket.onmessage = (event) => {
-      const points = JSON.parse(event.data);
-      if (!points.length) return; // 🔥 데이터 없으면 건너뜀
-
-      const x = points.map(p => p.x);
-      const y = points.map(p => p.y);
-      const z = points.map(p => p.z);
-
-      lidarData[1].x = x;
-      lidarData[1].y = y;
-      lidarData[1].z = z;
-      lidarData[1].marker.color = z; // Z축 높이에 따라 색상 매핑
-
-      Plotly.react('plot', lidarData, layout); // 부드럽게 react
-    };
-
-    socket.onclose = () => {
-      console.log('WebSocket disconnected.');
-    };
   </script>
 </body>
-
 </html>
