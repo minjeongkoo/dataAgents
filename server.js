@@ -1,114 +1,79 @@
 import dgram from 'dgram';
+import { WebSocketServer } from 'ws';
+import http from 'http';
 import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-// UDP 소켓 생성
-const socket = dgram.createSocket('udp4');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// 수신 처리
-socket.on('message', (msg, rinfo) => {
-  console.log(`\n[UDP] Message from ${rinfo.address}:${rinfo.port}`);
+// UDP 소켓
+const udpSocket = dgram.createSocket('udp4');
 
-  if (msg.length < 32) {
-    console.error('Invalid packet: too short');
-    return;
+// HTTP + WebSocket 서버
+const server = http.createServer((req, res) => {
+  if (req.url === '/') {
+    const html = fs.readFileSync(path.join(__dirname, 'index.html'));
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(html);
   }
+});
 
-  const header = parseCompactHeader(msg.slice(0, 32));
+const wss = new WebSocketServer({ server });
 
-  console.log('--- Header ---');
-  console.log(header);
+wss.on('connection', (ws) => {
+  console.log('WebSocket client connected');
+});
 
+// UDP 수신
+udpSocket.on('message', (msg, rinfo) => {
+  if (msg.length < 32) return;
   const modules = parseModules(msg.slice(32));
 
-  console.log('--- Modules ---');
-  modules.forEach((module, idx) => {
-    console.log(`Module ${idx}:`);
-    console.log(`  Distance values (mm):`, module.distances);
-    console.log(`  RSSI values:`, module.rssi);
-  });
-
-  modules.forEach((module, idx) => {
+  modules.forEach(module => {
     const points = module.distances.map((d, i) => ({
-      index: i,
       distance: d,
       rssi: module.rssi[i]
     }));
 
-    // Save as JSON File
-    fs.writeFileSync(`module_${idx}.json`, JSON.stringify(points, null, 2));
-    console.log(`Saved module_${idx}.json`);
+    wss.clients.forEach(client => {
+      if (client.readyState === 1) { // WebSocket.OPEN
+        client.send(JSON.stringify(points));
+      }
+    });
   });
 });
 
-// 에러 처리
-socket.on('error', (err) => {
-  console.error(`UDP socket error:\n${err.stack}`);
-  socket.close();
+udpSocket.bind(2115);
+server.listen(3000, () => {
+  console.log('HTTP/WebSocket server running on http://localhost:3000');
 });
 
-// 바인딩
-const LOCAL_PORT = 2115;
-socket.bind(LOCAL_PORT, '0.0.0.0', () => {
-  console.log(`Listening for UDP packets on 0.0.0.0:${LOCAL_PORT}`);
-});
-
-
-// -------------------- 파싱 함수들 --------------------
-
-// Compact Format 헤더 파싱
-function parseCompactHeader(buffer) {
-  return {
-    startOfFrame: buffer.readUInt32LE(0),
-    commandId: buffer.readUInt32LE(4),
-    telegramCounter: buffer.readBigUInt64LE(8),
-    timeStampTransmit: buffer.readBigUInt64LE(16),
-    telegramVersion: buffer.readUInt32LE(24),
-    sizeModule0: buffer.readUInt32LE(28)
-  };
-}
-
-// 모듈 파싱
+// ----------------- 모듈 파싱 함수 ------------------
 function parseModules(buffer) {
   const modules = [];
   let offset = 0;
 
   while (offset < buffer.length) {
-    const module = {};
+    if (offset + 84 > buffer.length) break;
 
-    // 최소 Metadata는 84 bytes
-    if (offset + 84 > buffer.length) {
-      console.error('Unexpected end of buffer while reading module metadata');
-      break;
-    }
-
-    // 메타데이터 읽기
-    const segmentCounter = buffer.readBigUInt64LE(offset + 0);
-    const frameNumber = buffer.readBigUInt64LE(offset + 8);
-    const senderId = buffer.readUInt32LE(offset + 16);
     const numberOfLines = buffer.readUInt32LE(offset + 20);
     const numberOfBeams = buffer.readUInt32LE(offset + 24);
     const numberOfEchos = buffer.readUInt32LE(offset + 28);
-    const distanceScalingFactor = buffer.readFloatLE(offset + 76); // 4바이트 float
-    const nextModuleSize = buffer.readUInt32LE(offset + 80);
+    const dataContentEchos = buffer.readUInt8(offset + 82);
+    const dataContentBeams = buffer.readUInt8(offset + 83);
 
-    const dataContentEchos = buffer.readUInt8(offset + 82);  // 거리(RSSI) 유무
-    const dataContentBeams = buffer.readUInt8(offset + 83);  // 각도(Property) 유무
-
-    // console.log(`Meta: #Lines=${numberOfLines}, #Beams=${numberOfBeams}, #Echos=${numberOfEchos}, Scaling=${distanceScalingFactor}`);
-
-    // Measurement data 시작 지점
     const measurementStart = offset + 84;
 
-    // Beam당 데이터 구조 해석
-    const echoFields = []; // 거리, RSSI 읽을지 여부
+    const echoFields = [];
     if (dataContentEchos & 0b00000001) echoFields.push('distance');
     if (dataContentEchos & 0b00000010) echoFields.push('rssi');
 
-    const beamFields = []; // Beam당 한번 읽을 데이터
+    const beamFields = [];
     if (dataContentBeams & 0b00000001) beamFields.push('property');
     if (dataContentBeams & 0b00000010) beamFields.push('theta');
 
-    const tupleSizePerEcho = echoFields.length * 2; // 각 echo당 2 bytes (distance, rssi 각각 uint16)
+    const tupleSizePerEcho = echoFields.length * 2;
     const tupleSizePerBeam = beamFields.reduce((sum, field) => sum + (field === 'property' ? 1 : 2), 0);
 
     const tupleSize = numberOfEchos * tupleSizePerEcho + tupleSizePerBeam;
@@ -116,12 +81,8 @@ function parseModules(buffer) {
     const totalTuples = numberOfLines * numberOfBeams;
     const expectedMeasurementSize = totalTuples * tupleSize;
 
-    if (measurementStart + expectedMeasurementSize > buffer.length) {
-      console.error('Measurement data exceeds buffer size');
-      break;
-    }
+    if (measurementStart + expectedMeasurementSize > buffer.length) break;
 
-    // 거리, RSSI 수집
     const distances = [];
     const rssi = [];
     let pointer = measurementStart;
@@ -131,7 +92,7 @@ function parseModules(buffer) {
         for (let echoIdx = 0; echoIdx < numberOfEchos; echoIdx++) {
           if (echoFields.includes('distance')) {
             const rawDistance = buffer.readUInt16LE(pointer);
-            distances.push(rawDistance); // <-- 수정
+            distances.push(rawDistance);
             pointer += 2;
           }
           if (echoFields.includes('rssi')) {
@@ -140,20 +101,16 @@ function parseModules(buffer) {
             pointer += 2;
           }
         }
-
         for (const field of beamFields) {
-          if (field === 'property') {
-            pointer += 1; // 1바이트
-          } else if (field === 'theta') {
-            pointer += 2; // 2바이트
-          }
+          if (field === 'property') pointer += 1;
+          else if (field === 'theta') pointer += 2;
         }
       }
     }
 
     modules.push({ distances, rssi });
 
-    // 다음 모듈로 이동
+    const nextModuleSize = buffer.readUInt32LE(offset + 80);
     if (nextModuleSize === 0) break;
     offset += nextModuleSize;
   }

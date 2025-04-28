@@ -1,79 +1,40 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>LiDAR Viewer</title>
-  <style>
-    body {
-      margin: 0;
-      background: black;
-    }
-
-    canvas {
-      display: block;
-      margin: auto;
-      background: #000;
-    }
-  </style>
+  <title>Live Distance vs RSSI</title>
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
-
 <body>
-  <canvas id="lidar" width="800" height="800"></canvas>
-  <pre id="log" style="color: lime; background: black; padding: 10px; height: 200px; overflow-y: scroll;"></pre>
-  <script src="/socket.io/socket.io.js"></script>
+  <h2>Live Distance vs RSSI</h2>
+  <div id="plot" style="width: 100%; height: 90vh;"></div>
+
   <script>
-    const canvas = document.getElementById('lidar');
-    const ctx = canvas.getContext('2d');
-    const scale = 0.03; // 확대/축소 비율
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
+    const socket = new WebSocket('ws://' + location.host);
 
-    const socket = io();
-    socket.on('scan', (data) => {
-      console.log("Received points:", data.points.length);
-      console.log(`Received ${data.points.length} points`);
+    let distances = [];
+    let rssi = [];
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // 원점 시각화
-      ctx.strokeStyle = 'red';
-      ctx.beginPath();
-      ctx.moveTo(cx - 5, cy);
-      ctx.lineTo(cx + 5, cy);
-      ctx.moveTo(cx, cy - 5);
-      ctx.lineTo(cx, cy + 5);
-      ctx.stroke();
-
-      ctx.fillStyle = 'lime';
-      data.points.forEach(p => {
-        const x = cx + p.x * scale;
-        const y = cy - p.y * scale;
-        ctx.fillStyle = 'lime';
-        
-        ctx.beginPath();
-        ctx.arc(x, y, 1.5, 0, Math.PI * 2);
-        ctx.fill();
+    socket.onmessage = (event) => {
+      const points = JSON.parse(event.data);
+      points.forEach(p => {
+        if (p.distance > 0 && p.distance < 20000) { // 0 ~ 20m 필터
+          distances.push(p.distance);
+          rssi.push(p.rssi);
+        }
       });
-    });
 
-    const logElement = document.getElementById("log");
-
-    function log(message) {
-      const now = new Date().toLocaleTimeString();
-      logElement.textContent += `[${now}] ${message}\n`;
-      logElement.scrollTop = logElement.scrollHeight;
-    }
-
-    socket.on('connect', () => {
-      log("WebSocket connected");
-    });
-
-    socket.on('scan', (data) => {
-      log(`Received ${data.points.length} points`);
-    });
-
+      Plotly.newPlot('plot', [{
+        x: distances,
+        y: rssi,
+        mode: 'markers',
+        marker: { size: 5 }
+      }], {
+        title: 'Distance (mm) vs RSSI',
+        xaxis: { title: 'Distance (mm)' },
+        yaxis: { title: 'RSSI' }
+      });
+    };
   </script>
 </body>
-
 </html>
