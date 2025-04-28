@@ -1,27 +1,24 @@
-// server.js
-import dgram from 'dgram'
+const dgram = require('dgram');
 
-const UDP_PORT = 2115
-const LISTEN_ADDR = '0.0.0.0'  // 모든 인터페이스에서 수신
+// UDP 소켓 생성
+const socket = dgram.createSocket('udp4');
 
-const socket = dgram.createSocket('udp4')
-
-socket.on('listening', () => {
-  const addr = socket.address()
-  console.log(`Listening on ${addr.address}:${addr.port}`)
-})
-
+// 데이터를 수신했을 때 처리
 socket.on('message', (msg, rinfo) => {
-  const ts = new Date().toISOString()
-  // 수신 정보 + 패킷 크기
-  console.log(`[${ts}] Received ${msg.length} bytes from ${rinfo.address}:${rinfo.port}`)
-  // 바이너리 데이터를 16진수로 출력 (원하면 toString() 으로 문자열 출력 가능)
-  console.log(msg.toString('hex'))
-})
+  console.log(`Received UDP message from ${rinfo.address}:${rinfo.port}`);
+  console.log('Data:', msg);
+});
 
+// 에러 핸들링
 socket.on('error', (err) => {
-  console.error('UDP socket error:', err)
-  socket.close()
-})
+  console.error(`UDP socket error:\n${err.stack}`);
+  socket.close();
+});
 
-socket.bind(UDP_PORT, LISTEN_ADDR)
+// 192.168.0.100 IP와 포트에 바인딩
+const LOCAL_PORT = 2115; // 내가 수신할 포트 (UDP 송신쪽 장비가 보내는 포트 맞춰야 함)
+const LOCAL_HOST = '192.168.0.100'; // 이건 내 PC IP가 아니라, **받을 때는 0.0.0.0으로 하는 게 일반적**이야
+
+socket.bind(LOCAL_PORT, '0.0.0.0', () => {
+  console.log(`Listening for UDP packets on 0.0.0.0:${LOCAL_PORT}`);
+});
