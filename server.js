@@ -2,102 +2,128 @@ import dgram from 'dgram';
 import express from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
+const UDP_PORT = 2115;
+const UDP_HOST = '0.0.0.0'; // 모든 IP 수신
+const HTTP_PORT = 3000;
 
-const UDP_PORT = 2115;    // UDP 수신 포트 (라이다)
-const WS_PORT = 3000;     // WebSocket 제공 포트 (브라우저)
+// __dirname 설정 (ESM 지원용)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// multiScan100 기본 빔 수직각 (deg)
-const beamAnglesDeg = [
-  -15.0, -13.7, -12.3, -11.0, -9.6, -8.3,
-  -7.0, -5.6, -4.3, -2.9, -1.6, -0.2,
-   1.1,  2.5,  3.8,  5.2,  6.5,  7.9,
-   9.2, 10.6, 11.9, 13.3, 14.6, 16.0
-];
-
-// 한 바퀴 회전 시간 (10Hz → 100ms)
-const ROTATION_PERIOD_MS = 100;
-
+// UDP 소켓 생성
 const udpSocket = dgram.createSocket('udp4');
+
+// Express 웹 서버 생성
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
+const httpServer = http.createServer(app);
+const io = new Server(httpServer);
 
-app.use(express.static('public'));
+// Static 파일 서빙 (public 폴더)
+app.use(express.static(path.join(__dirname, 'public')));
 
-// WebSocket 서버 연결
-io.on('connection', (socket) => {
-  console.log('[WS] Client connected');
+udpSocket.on('listening', () => {
+  const address = udpSocket.address();
+  console.log(`[UDP] Listening on ${address.address}:${address.port}`);
 });
 
-// UDP 데이터 수신
 udpSocket.on('message', (msg, rinfo) => {
   console.log(`[UDP] Message from ${rinfo.address}:${rinfo.port} (${msg.length} bytes)`);
 
   const points = parseCompactFormat(msg);
+  console.log(`[WebSocket] Sending ${points.length} points`);
 
-  if (points.length > 0) {
-    console.log(`[WebSocket] Sending ${points.length} points`);
-    io.emit('lidar-points', points); // WebSocket으로 브라우저에 전달
-  }
+  io.emit('lidar-points', points);
 });
 
-// UDP, WS 서버 시작
-udpSocket.bind(UDP_PORT);
-server.listen(WS_PORT, () => {
-  console.log(`[HTTP/WS] Server running at http://localhost:${WS_PORT}`);
+udpSocket.bind(UDP_PORT, UDP_HOST);
+
+// 웹소켓 연결
+io.on('connection', (socket) => {
+  console.log('[WebSocket] Client connected');
 });
 
+httpServer.listen(HTTP_PORT, () => {
+  console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
+});
 
-// ===== 핵심: Compact Format 파싱 함수 =====
-
+// Compact Format 파서
 function parseCompactFormat(buffer) {
+  let offset = 0;
+
+  const segmentCounter = buffer.readBigUInt64LE(offset); offset += 8;
+  const frameNumber = buffer.readBigUInt64LE(offset); offset += 8;
+  const senderId = buffer.readUInt32LE(offset); offset += 4;
+
+  const numberOfLinesInModule = buffer.readUInt32LE(offset); offset += 4;
+  const numberOfBeamsPerScan = buffer.readUInt32LE(offset); offset += 4;
+  const numberOfEchosPerBeam = buffer.readUInt32LE(offset); offset += 4;
+
+  const timeStampStart = [];
+  for (let i = 0; i < numberOfLinesInModule; i++) {
+    timeStampStart.push(buffer.readBigUInt64LE(offset));
+    offset += 8;
+  }
+
+  const timeStampStop = [];
+  for (let i = 0; i < numberOfLinesInModule; i++) {
+    timeStampStop.push(buffer.readBigUInt64LE(offset));
+    offset += 8;
+  }
+
+  const phiArray = [];
+  for (let i = 0; i < numberOfLinesInModule; i++) {
+    phiArray.push(buffer.readFloatLE(offset));
+    offset += 4;
+  }
+
+  const thetaStartArray = [];
+  for (let i = 0; i < numberOfLinesInModule; i++) {
+    thetaStartArray.push(buffer.readFloatLE(offset));
+    offset += 4;
+  }
+
+  const thetaStopArray = [];
+  for (let i = 0; i < numberOfLinesInModule; i++) {
+    thetaStopArray.push(buffer.readFloatLE(offset));
+    offset += 4;
+  }
+
+  const distanceScalingFactor = buffer.readFloatLE(offset);
+  offset += 4;
+
+  const nextModuleSize = buffer.readUInt32LE(offset);
+  offset += 4;
+
+  offset += 1; // Reserved
+  offset += 1; // DataContentEchos
+  offset += 1; // DataContentBeams
+  offset += 1; // Reserved
+
   const points = [];
 
-  // 최소 길이 체크 (헤더 + 모듈 데이터)
-  if (buffer.length < 32) return points;
+  for (let lineIdx = 0; lineIdx < numberOfLinesInModule; lineIdx++) {
+    const phi = phiArray[lineIdx];
 
-  const sof = buffer.readUInt32BE(0);
-  if (sof !== 0x02020202) return points; // Compact Format Start 검증
+    for (let beamIdx = 0; beamIdx < numberOfBeamsPerScan; beamIdx++) {
+      const distanceRaw = buffer.readUInt16LE(offset); offset += 2;
+      const rssi = buffer.readUInt16LE(offset); offset += 2;
+      const properties = buffer.readUInt8(offset); offset += 1;
+      const thetaRaw = buffer.readUInt16LE(offset); offset += 2;
 
-  const telegramCounter = buffer.readBigUInt64LE(8);
-  const timestamp = Number(buffer.readBigUInt64LE(16)); // ns 단위
+      const distance = distanceRaw * distanceScalingFactor;
+      const theta = (thetaRaw - 16384) / 5215; // uint16 -> radian 변환
 
-  // Compact Format은 헤더 이후 모듈로 이어짐
-  const moduleOffset = 32;
+      const x = distance * Math.cos(phi) * Math.cos(theta);
+      const y = distance * Math.cos(phi) * Math.sin(theta);
+      const z = distance * Math.sin(phi);
 
-  // 여기선 간단히 Distance와 RSSI만 파싱 (예시로 Distance만)
-  const numChannels = buffer.readUInt32LE(moduleOffset);
-  const channelDataOffset = moduleOffset + 4;
-
-  const distanceData = [];
-  const distanceStartOffset = channelDataOffset + 24; // 디폴트 위치
-
-  // Distance 데이터 읽기 (float32)
-  for (let i = 0; i < numChannels; i++) {
-    const dist = buffer.readFloatLE(distanceStartOffset + i * 4);
-    distanceData.push(dist); // mm
-  }
-
-  // === Distance 데이터로 포인트 변환 ===
-
-  // 현재 스캔 각도 (timestamp 기준으로 phi 계산)
-  const timestampMs = timestamp / 1e6; // ns → ms 변환
-  const phiDeg = (timestampMs % ROTATION_PERIOD_MS) / ROTATION_PERIOD_MS * 360;
-  const phiRad = phiDeg * Math.PI / 180;
-
-  for (let beamId = 0; beamId < beamAnglesDeg.length; beamId++) {
-    const thetaDeg = beamAnglesDeg[beamId];
-    const thetaRad = thetaDeg * Math.PI / 180;
-
-    const r = distanceData[beamId]; // Beam 별 Distance
-    if (r <= 0 || r > 120000) continue; // 0이나 비정상 거리 필터
-
-    const x = r * Math.cos(thetaRad) * Math.cos(phiRad);
-    const y = r * Math.cos(thetaRad) * Math.sin(phiRad);
-    const z = r * Math.sin(thetaRad);
-
-    points.push({ x, y, z });
+      if (distance > 100 && distance < 120000) { // 10cm ~ 120m 범위만 허용
+        points.push({ x, y, z });
+      }
+    }
   }
 
   return points;
