@@ -53,13 +53,15 @@ httpServer.listen(HTTP_PORT, () => {
 function parseCompactFormat(buffer) {
   let offset = 0;
 
+  // === Compact Frame Header (고정) ===
   const startOfFrame = buffer.readUInt32BE(offset); offset += 4;
   const commandId = buffer.readUInt32LE(offset); offset += 4;
-  const segmentCounter = buffer.readBigUInt64LE(offset); offset += 8;
+  const telegramCounter = buffer.readBigUInt64LE(offset); offset += 8;
   const timeStampTransmit = buffer.readBigUInt64LE(offset); offset += 8;
   const telegramVersion = buffer.readUInt32LE(offset); offset += 4;
-  const sizeModule0 = buffer.readUInt32LE(offset); offset += 4;
+  const payloadSize = buffer.readUInt32LE(offset); offset += 4; // == SizeModule0
 
+  // === Module Header ===
   const numberOfLinesInModule = buffer.readUInt32LE(offset); offset += 4;
   const numberOfBeamsPerScan = buffer.readUInt32LE(offset); offset += 4;
   const numberOfEchosPerBeam = buffer.readUInt32LE(offset); offset += 4;
