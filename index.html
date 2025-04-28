@@ -2,25 +2,38 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Live Distance vs RSSI</title>
+  <title>Live Distance vs RSSI (Color by Distance)</title>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
-  <h2>Live Distance vs RSSI</h2>
+  <h2>Live Distance vs RSSI (Distance-based Color)</h2>
   <div id="plot" style="width: 100%; height: 90vh;"></div>
 
   <script>
     const socket = new WebSocket('ws://' + location.host);
 
-    let distances = [];
-    let rssi = [];
+    socket.onopen = () => {
+      console.log('WebSocket connected.');
+    };
 
     socket.onmessage = (event) => {
       const points = JSON.parse(event.data);
+
+      const distances = [];
+      const rssi = [];
+      const colors = [];
+
       points.forEach(p => {
         if (p.distance > 0 && p.distance < 20000) { // 0 ~ 20m 필터
           distances.push(p.distance);
           rssi.push(p.rssi);
+
+          // 거리별 색상 설정 (파랑 → 빨강 그라데이션)
+          const normalized = Math.min(p.distance / 20000, 1); // 0.0 ~ 1.0 사이로 정규화
+          const r = Math.floor(255 * normalized);
+          const b = Math.floor(255 * (1 - normalized));
+          const color = `rgb(${r},0,${b})`;
+          colors.push(color);
         }
       });
 
@@ -28,12 +41,20 @@
         x: distances,
         y: rssi,
         mode: 'markers',
-        marker: { size: 5 }
+        marker: {
+          size: 6,
+          color: colors,
+        }
       }], {
         title: 'Distance (mm) vs RSSI',
-        xaxis: { title: 'Distance (mm)' },
-        yaxis: { title: 'RSSI' }
+        xaxis: { title: 'Distance (mm)', range: [0, 20000] },
+        yaxis: { title: 'RSSI' },
+        margin: { t: 40 }
       });
+    };
+
+    socket.onclose = () => {
+      console.log('WebSocket disconnected.');
     };
   </script>
 </body>
