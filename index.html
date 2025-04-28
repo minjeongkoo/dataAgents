@@ -1,78 +1,93 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8">
-  <title>Live 3D Lidar Point Cloud (Improved)</title>
-  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <meta charset="UTF-8">
+    <title>Live 3D Lidar Point Cloud (Improved)</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
+
 <body>
-  <h2>Live 3D Lidar Point Cloud (Smooth)</h2>
-  <div id="plot" style="width: 100%; height: 90vh;"></div>
+    <h2>Live 3D Lidar Point Cloud (Smooth)</h2>
+    <div id="plot" style="width: 100%; height: 90vh;"></div>
 
-  <script>
-    const socket = new WebSocket('ws://' + location.host);
+    <script>
+        const socket = new WebSocket('ws://' + location.host);
 
-    let layout = {
-      title: '3D Lidar Point Cloud',
-      scene: {
-        xaxis: { title: 'X (mm)' },
-        yaxis: { title: 'Y (mm)' },
-        zaxis: { title: 'Z (mm)' }
-      },
-      margin: { t: 40 }
-    };
+        let layout = {
+            title: '3D Lidar Point Cloud',
+            scene: {
+                xaxis: {
+                    title: 'X (mm)',
+                    range: [-20000, 20000],   // X축 범위 고정 (-20m ~ +20m)
+                },
+                yaxis: {
+                    title: 'Y (mm)',
+                    range: [-20000, 20000],   // Y축 범위 고정
+                },
+                zaxis: {
+                    title: 'Z (mm)',
+                    range: [-5000, 5000],     // Z축 범위 고정 (수직방향, 보통 -5m ~ +5m 충분)
+                },
+                aspectmode: 'manual',       // 비율 수동 고정
+                aspectratio: { x: 1, y: 1, z: 0.5 } // X:Y:Z 비율 조정 (Z를 조금 눌러서 보여줌)
+            },
+            margin: { t: 40 }
+        };
 
-    let lidarPoint = {
-      x: [0],
-      y: [0],
-      z: [0],
-      mode: 'markers',
-      type: 'scatter3d',
-      marker: {
-        size: 5,
-        color: 'black'
-      },
-      name: 'Lidar Position'
-    };
 
-    let lidarData = [lidarPoint, {
-      x: [],
-      y: [],
-      z: [],
-      mode: 'markers',
-      type: 'scatter3d',
-      marker: {
-        size: 2,
-        color: [],
-        colorscale: 'Viridis',
-        opacity: 0.8
-      },
-      name: 'Points'
-    }];
+        let lidarPoint = {
+            x: [0],
+            y: [0],
+            z: [0],
+            mode: 'markers',
+            type: 'scatter3d',
+            marker: {
+                size: 5,
+                color: 'black'
+            },
+            name: 'Lidar Position'
+        };
 
-    Plotly.newPlot('plot', lidarData, layout);
+        let lidarData = [lidarPoint, {
+            x: [],
+            y: [],
+            z: [],
+            mode: 'markers',
+            type: 'scatter3d',
+            marker: {
+                size: 2,
+                color: [],
+                colorscale: 'Viridis',
+                opacity: 0.8
+            },
+            name: 'Points'
+        }];
 
-    socket.onopen = () => {
-      console.log('WebSocket connected.');
-    };
+        Plotly.react('plot', lidarData, layout);
 
-    socket.onmessage = (event) => {
-      const points = JSON.parse(event.data);
-      const x = points.map(p => p.x);
-      const y = points.map(p => p.y);
-      const z = points.map(p => p.z);
+        socket.onopen = () => {
+            console.log('WebSocket connected.');
+        };
 
-      lidarData[1].x = x;
-      lidarData[1].y = y;
-      lidarData[1].z = z;
-      lidarData[1].marker.color = z; // Z축 높이에 따라 색깔 매핑
+        socket.onmessage = (event) => {
+            const points = JSON.parse(event.data);
+            const x = points.map(p => p.x);
+            const y = points.map(p => p.y);
+            const z = points.map(p => p.z);
 
-      Plotly.react('plot', lidarData, layout); // 🚀 react() 사용으로 부드럽게
-    };
+            lidarData[1].x = x;
+            lidarData[1].y = y;
+            lidarData[1].z = z;
+            lidarData[1].marker.color = z; // Z축 높이에 따라 색깔 매핑
 
-    socket.onclose = () => {
-      console.log('WebSocket disconnected.');
-    };
-  </script>
+            Plotly.react('plot', lidarData, layout); // 🚀 react() 사용으로 부드럽게
+        };
+
+        socket.onclose = () => {
+            console.log('WebSocket disconnected.');
+        };
+    </script>
 </body>
+
 </html>
