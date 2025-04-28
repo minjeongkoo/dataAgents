@@ -61,6 +61,12 @@ function parseCompactFormat(buffer) {
   const numberOfBeamsPerScan = buffer.readUInt32LE(offset); offset += 4;
   const numberOfEchosPerBeam = buffer.readUInt32LE(offset); offset += 4;
 
+  console.log('[DEBUG] Header Info:');
+  console.log('  numberOfLinesInModule:', numberOfLinesInModule);
+  console.log('  numberOfBeamsPerScan:', numberOfBeamsPerScan);
+  console.log('  numberOfEchosPerBeam:', numberOfEchosPerBeam);
+
+
   const timeStampStart = [];
   for (let i = 0; i < numberOfLinesInModule; i++) {
     timeStampStart.push(buffer.readBigUInt64LE(offset));
