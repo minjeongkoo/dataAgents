@@ -1,10 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <title>Live 3D Lidar Point Cloud (Final)</title>
   <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
+
 <body>
   <h2>Live 3D Lidar Point Cloud (Smooth)</h2>
   <div id="plot" style="width: 100%; height: 90vh;"></div>
@@ -71,6 +73,34 @@
       console.log('WebSocket connected.');
     };
 
+    socket.on('lidar-points', (points) => {
+      const x = points.map(p => p.x);
+      const y = points.map(p => p.y);
+      const z = points.map(p => p.z);
+
+      const trace = {
+        x,
+        y,
+        z,
+        mode: 'markers',
+        type: 'scatter3d',
+        marker: {
+          size: 2,
+          color: 'rgb(0, 255, 0)',
+        }
+      };
+
+      Plotly.react('chart', [trace], {
+        margin: { l: 0, r: 0, b: 0, t: 0 },
+        scene: {
+          xaxis: { range: [-30000, 30000] },
+          yaxis: { range: [-30000, 30000] },
+          zaxis: { range: [-30000, 30000] },
+        }
+      });
+    });
+
+
     socket.onmessage = (event) => {
       const points = JSON.parse(event.data);
       if (!points.length) return; // 🔥 데이터 없으면 건너뜀
@@ -92,4 +122,5 @@
     };
   </script>
 </body>
+
 </html>

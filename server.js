@@ -37,6 +37,7 @@ udpSocket.on('message', (msg, rinfo) => {
   const points = parseCompactFormat(msg);
 
   if (points.length > 0) {
+    console.log(`[WebSocket] Sending ${points.length} points`);
     io.emit('lidar-points', points); // WebSocket으로 브라우저에 전달
   }
 });
