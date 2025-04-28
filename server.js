@@ -1,4 +1,5 @@
 import dgram from 'dgram';
+import fs from 'fs';
 
 // UDP 소켓 생성
 const socket = dgram.createSocket('udp4');
@@ -6,7 +7,7 @@ const socket = dgram.createSocket('udp4');
 // 수신 처리
 socket.on('message', (msg, rinfo) => {
   console.log(`\n[UDP] Message from ${rinfo.address}:${rinfo.port}`);
-  
+
   if (msg.length < 32) {
     console.error('Invalid packet: too short');
     return;
@@ -18,12 +19,24 @@ socket.on('message', (msg, rinfo) => {
   console.log(header);
 
   const modules = parseModules(msg.slice(32));
-  
+
   console.log('--- Modules ---');
   modules.forEach((module, idx) => {
     console.log(`Module ${idx}:`);
     console.log(`  Distance values (mm):`, module.distances);
     console.log(`  RSSI values:`, module.rssi);
+  });
+
+  modules.forEach((module, idx) => {
+    const points = module.distances.map((d, i) => ({
+      index: i,
+      distance: d,
+      rssi: module.rssi[i]
+    }));
+
+    // Save as JSON File
+    fs.writeFileSync(`module_${idx}.json`, JSON.stringify(points, null, 2));
+    console.log(`Saved module_${idx}.json`);
   });
 });
 
@@ -118,7 +131,7 @@ function parseModules(buffer) {
         for (let echoIdx = 0; echoIdx < numberOfEchos; echoIdx++) {
           if (echoFields.includes('distance')) {
             const rawDistance = buffer.readUInt16LE(pointer);
-            distances.push(rawDistance * distanceScalingFactor); // Scaling factor 적용
+            distances.push(rawDistance); // <-- 수정
             pointer += 2;
           }
           if (echoFields.includes('rssi')) {
