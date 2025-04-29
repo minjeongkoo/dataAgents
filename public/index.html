@@ -2,71 +2,90 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>multiScan100 Viewer</title>
-  <script src="/socket.io/socket.io.js"></script> <!-- ✅ Socket.IO 클라이언트 스크립트 추가 -->
-  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script> <!-- ✅ Plotly.js -->
+  <title>LiDAR 3D Visualization</title>
   <style>
-    body { margin: 0; overflow: hidden; }
-    #chart { width: 100vw; height: 100vh; }
+    body { margin: 0; overflow: hidden; background-color: #000; }
+    canvas { display: block; }
   </style>
 </head>
 <body>
-  <div id="chart"></div>
+<script type="module">
+  import * as THREE from 'https://cdn.skypack.dev/three';
+  import { OrbitControls } from 'https://cdn.skypack.dev/three/examples/jsm/controls/OrbitControls.js';
 
-  <script>
-    // Socket.IO 연결
-    const socket = io();
+  // Scene, Camera, Renderer
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 0, 50);
 
-    
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
 
-    socket.on('lidar-points', (points) => {
-      console.log('[Browser] Received points:', points.length);
-      console.log('[Browser] Example point:', points[0]);
+  // Controls (축 고정 버전)
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableRotate = false; // 회전 금지
+  controls.enableZoom = true;    // 줌 허용
+  controls.enablePan = true;     // 이동 허용
+  controls.target.set(0, 0, 0);  // 중심 고정
+  controls.update();
 
-      if (points.length === 0) return;
+  // 축 표시
+  const axesHelper = new THREE.AxesHelper(10);
+  scene.add(axesHelper);
 
-      const x = points.map(p => p.x);
-      const y = points.map(p => p.y);
-      const z = points.map(p => p.z);
+  // LiDAR 위치 표시 (검정 점)
+  const lidarGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+  const lidarMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+  const lidarMesh = new THREE.Mesh(lidarGeometry, lidarMaterial);
+  scene.add(lidarMesh);
 
-      const trace = {
-        x,
-        y,
-        z,
-        mode: 'markers',
-        type: 'scatter3d',
-        marker: {
-          size: 2,
-          color: z,
-          colorscale: 'Jet', // ✅ z값 기준으로 컬러맵
-          cmin: -10000,
-          cmax: 10000,
-          showscale: false
-        }
-      };
+  // 점들을 담을 그룹
+  const pointsGroup = new THREE.Group();
+  scene.add(pointsGroup);
 
-      const lidarOrigin = {
-        x: [0],
-        y: [0],
-        z: [0],
-        mode: 'markers',
-        type: 'scatter3d',
-        marker: {
-          size: 5,
-          color: 'black'
-        }
-      };
+  // WebSocket 연결
+  const socket = new WebSocket(`ws://${location.host}`);
 
-      Plotly.react('chart', [trace, lidarOrigin], {
-        margin: {l: 0, r: 0, b: 0, t: 0},
-        scene: {
-          xaxis: {range: [-30000, 30000]},
-          yaxis: {range: [-30000, 30000]},
-          zaxis: {range: [-30000, 30000]},
-          aspectmode: 'data' // ✅ x,y,z 비율 고정
-        }
+  socket.addEventListener('message', (event) => {
+    const points = JSON.parse(event.data);
+
+    if (Array.isArray(points)) {
+      // 이전 점들 제거
+      pointsGroup.clear();
+
+      // 새 점들 추가
+      points.forEach(({ x, y, z }) => {
+        const distance = Math.sqrt(x*x + y*y + z*z);
+
+        // 거리별 색상
+        const color = new THREE.Color();
+        color.setHSL((distance / 100.0) % 1.0, 1.0, 0.5);
+
+        const material = new THREE.MeshBasicMaterial({ color });
+        const geometry = new THREE.SphereGeometry(0.15, 8, 8);
+        const point = new THREE.Mesh(geometry, material);
+        point.position.set(x / 1000, y / 1000, z / 1000); // mm -> m 변환
+        pointsGroup.add(point);
       });
-    });
-  </script>
+    }
+  });
+
+  // 창 리사이즈 대응
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // 렌더링 루프
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+
+  animate();
+</script>
 </body>
 </html>
