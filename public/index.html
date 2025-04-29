@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LiDAR 3D Visualization</title>
+  <style>
+    body { margin: 0; overflow: hidden; background-color: #000; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+<script type="module">
+  import * as THREE from 'https://cdn.skypack.dev/three';
+  import { OrbitControls } from 'https://cdn.skypack.dev/three/examples/jsm/controls/OrbitControls.js';
+
+  // Scene, Camera, Renderer
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 0, 50);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  // Controls (축 고정 버전)
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableRotate = false; // 회전 금지
+  controls.enableZoom = true;    // 줌 허용
+  controls.enablePan = true;     // 이동 허용
+  controls.target.set(0, 0, 0);  // 중심 고정
+  controls.update();
+
+  // 축 표시
+  const axesHelper = new THREE.AxesHelper(10);
+  scene.add(axesHelper);
+
+  // LiDAR 위치 표시 (검정 점)
+  const lidarGeometry = new THREE.SphereGeometry(0.3, 16, 16);
+  const lidarMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+  const lidarMesh = new THREE.Mesh(lidarGeometry, lidarMaterial);
+  scene.add(lidarMesh);
+
+  // 점들을 담을 그룹
+  const pointsGroup = new THREE.Group();
+  scene.add(pointsGroup);
+
+  // WebSocket 연결
+  const socket = new WebSocket(`ws://${location.host}`);
+
+  socket.addEventListener('message', (event) => {
+    const points = JSON.parse(event.data);
+
+    if (Array.isArray(points)) {
+      // 이전 점들 제거
+      pointsGroup.clear();
+
+      // 새 점들 추가
+      points.forEach(({ x, y, z }) => {
+        const distance = Math.sqrt(x*x + y*y + z*z);
+
+        // 거리별 색상
+        const color = new THREE.Color();
+        color.setHSL((distance / 100.0) % 1.0, 1.0, 0.5);
+
+        const material = new THREE.MeshBasicMaterial({ color });
+        const geometry = new THREE.SphereGeometry(0.15, 8, 8);
+        const point = new THREE.Mesh(geometry, material);
+        point.position.set(x / 1000, y / 1000, z / 1000); // mm -> m 변환
+        pointsGroup.add(point);
+      });
+    }
+  });
+
+  // 창 리사이즈 대응
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // 렌더링 루프
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+
+  animate();
+</script>
+</body>
+</html>
