@@ -1,13 +1,3 @@
-const dgram = require('dgram');
-const express = require('express');
-const http = require('http');
-const socketio = require('socket.io');
-const { spawn } = require('child_process');
-
-const app = express();
-const server = http.createServer(app);
-const io = socketio(server);
-const udp = dgram.createSocket('udp4');
 import dgram from 'dgram';
 import express from 'express';
 import http from 'http';
@@ -16,8 +6,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const UDP_PORT = 2115;
-const UDP_HOST = '169.254.199.100';
-const WEB_PORT = 3000;
 const UDP_HOST = '0.0.0.0';
 const HTTP_PORT = 3000;
 
@@ -29,14 +17,6 @@ const app = express();
 const httpServer = http.createServer(app);
 const io = new Server(httpServer);
 
-app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/index.html');
-});
-
-// Start Python process
-const python = spawn('python', ['parser.py']);
-python.stderr.on('data', err => {
-  console.error('Python stderr:', err.toString());
 app.use(express.static(path.join(__dirname, 'public')));
 
 udpSocket.on('listening', () => {
