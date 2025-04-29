@@ -33,7 +33,7 @@ udpSocket.on('message', (msg, rinfo) => {
     console.log(`[WebSocket] Sending ${points.length} points`);
     console.log(`[WebSocket] Example point:`, points[0]);
   } else {
-    console.log(`[WebSocket] Sending 0 points`);
+    console.log(`[WebSocket] No points extracted.`);
   }
 
   io.emit('lidar-points', points);
@@ -49,17 +49,25 @@ httpServer.listen(HTTP_PORT, () => {
   console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
 });
 
-// 🛠️ 순수 파싱만 하는 Compact Format 파서
 function parseCompactFormat(buffer) {
   let offset = 0;
+  const points = [];
 
+  // 1. Header
   const startOfFrame = buffer.readUInt32BE(offset); offset += 4;
   const commandId = buffer.readUInt32LE(offset); offset += 4;
   const telegramCounter = buffer.readBigUInt64LE(offset); offset += 8;
   const timeStampTransmit = buffer.readBigUInt64LE(offset); offset += 8;
   const telegramVersion = buffer.readUInt32LE(offset); offset += 4;
-  const payloadSize = buffer.readUInt32LE(offset); offset += 4;
+  const sizeModule0 = buffer.readUInt32LE(offset); offset += 4;
 
+  // 2. Module 시작
+  const moduleStart = offset;
+
+  // (1) SegmentCounter, FrameNumber, SenderId  = 8+8+4 = 20 bytes skip
+  offset += 20;
+
+  // (2) Metadata
   const numberOfLinesInModule = buffer.readUInt32LE(offset); offset += 4;
   const numberOfBeamsPerScan = buffer.readUInt32LE(offset); offset += 4;
   const numberOfEchosPerBeam = buffer.readUInt32LE(offset); offset += 4;
@@ -68,6 +76,10 @@ function parseCompactFormat(buffer) {
   console.log(`  numberOfLinesInModule: ${numberOfLinesInModule}`);
   console.log(`  numberOfBeamsPerScan: ${numberOfBeamsPerScan}`);
   console.log(`  numberOfEchosPerBeam: ${numberOfEchosPerBeam}`);
+
+  if (numberOfLinesInModule === 0 || numberOfBeamsPerScan === 0) {
+    return [];
+  }
 
   const timeStampStart = [];
   for (let i = 0; i < numberOfLinesInModule; i++) {
@@ -99,35 +111,30 @@ function parseCompactFormat(buffer) {
     offset += 4;
   }
 
-  const distanceScalingFactor = buffer.readFloatLE(offset);
+  const distanceScalingFactor = buffer.readFloatLE(offset); offset += 4;
+  const nextModuleSize = buffer.readUInt32LE(offset); offset += 4;
+
+  // 3. Flags (4 bytes)
   offset += 4;
 
-  const nextModuleSize = buffer.readUInt32LE(offset);
-  offset += 4;
-
-  offset += 1; // Reserved
-  offset += 1; // DataContentEchos
-  offset += 1; // DataContentBeams
-  offset += 1; // Reserved
-
-  const points = [];
-
-  for (let lineIdx = 0; lineIdx < numberOfLinesInModule; lineIdx++) {
-    const phi = phiArray[lineIdx];
-
-    for (let beamIdx = 0; beamIdx < numberOfBeamsPerScan; beamIdx++) {
+  // 4. Measurement Data 시작
+  for (let beamIdx = 0; beamIdx < numberOfBeamsPerScan; beamIdx++) {
+    for (let lineIdx = 0; lineIdx < numberOfLinesInModule; lineIdx++) {
       const distanceRaw = buffer.readUInt16LE(offset); offset += 2;
       const rssi = buffer.readUInt16LE(offset); offset += 2;
+
+      const distance = distanceRaw * distanceScalingFactor; // mm 단위
       const properties = buffer.readUInt8(offset); offset += 1;
       const thetaRaw = buffer.readUInt16LE(offset); offset += 2;
 
-      const distance = distanceRaw * distanceScalingFactor;
-      const theta = (thetaRaw - 16384) / 5215; // uint16 -> radian 변환
+      const theta = (thetaRaw - 16384) / 5215; // 라디안 변환
+      const phi = phiArray[lineIdx]; // 라인별 고도각
 
       const x = distance * Math.cos(phi) * Math.cos(theta);
       const y = distance * Math.cos(phi) * Math.sin(theta);
       const z = distance * Math.sin(phi);
 
+      // 거리 유효성 검사 (100mm ~ 120,000mm)
       if (distance > 100 && distance < 120000) {
         points.push({ x, y, z });
       }
