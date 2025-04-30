@@ -1,60 +1,66 @@
-<!-- public/index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
   <title>SICK LiDAR 3D</title>
-  <style> html,body{margin:0;overflow:hidden;width:100%;height:100%;background:#000;} </style>
+  <style>
+    html, body { margin: 0; overflow: hidden; width: 100%; height: 100%; background: #000; }
+    canvas { display: block; }
+  </style>
   <script type="importmap">
-  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js" } }
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js"
+    }
+  }
   </script>
 </head>
 <body>
   <script src="/socket.io/socket.io.js"></script>
+
   <script type="module">
     import * as THREE from 'three'
     import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/controls/OrbitControls.js'
 
     const scene    = new THREE.Scene()
     const cam      = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 100)
-    cam.position.set(0,0,5)
-    const rend     = new THREE.WebGLRenderer({ antialias:true })
-    rend.setSize(innerWidth,innerHeight)
+    cam.position.set(0, 0, 5)
+    const rend     = new THREE.WebGLRenderer({ antialias: true })
+    rend.setSize(innerWidth, innerHeight)
     document.body.appendChild(rend.domElement)
 
     const ctrl     = new OrbitControls(cam, rend.domElement)
     ctrl.enableDamping = true
 
-    // 빈 point-cloud
-    const geom = new THREE.BufferGeometry()
-    const mat  = new THREE.PointsMaterial({ size:0.02, color:0x00ff00 })
-    const cloud = new THREE.Points(geom, mat)
-    scene.add(cloud)
+    const geom      = new THREE.BufferGeometry()
+    const mat       = new THREE.PointsMaterial({ size: 0.02, color: 0x00ff00 })
+    const pointCloud= new THREE.Points(geom, mat)
+    scene.add(pointCloud)
 
-    let allPos = []  // 누적될 flat [x,y,z, x,y,z, …]
+    let allPos = []  // [x,y,z, x,y,z, ...]
 
-    function update() {
+    function updateCloud() {
       const arr = new Float32Array(allPos)
       geom.setAttribute('position', new THREE.BufferAttribute(arr, 3))
       geom.attributes.position.needsUpdate = true
       geom.computeBoundingSphere()
     }
 
-    function anim() {
-      requestAnimationFrame(anim)
+    function animate() {
+      requestAnimationFrame(animate)
       ctrl.update()
       rend.render(scene, cam)
     }
-    anim()
+    animate()
 
-    const sock = io()
-    sock.on('lidar-points', pts => {
+    const socket = io()
+    socket.on('lidar-points', pts => {
       for (const p of pts) {
         if (Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)) {
           allPos.push(p.x, p.y, p.z)
         }
       }
-      update()
+      updateCloud()
     })
 
     window.addEventListener('resize', () => {

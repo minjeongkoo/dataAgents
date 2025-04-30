@@ -1,4 +1,3 @@
-// server.js
 import dgram from 'dgram'
 import express from 'express'
 import http from 'http'
@@ -6,13 +5,14 @@ import { Server } from 'socket.io'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-// __dirname 세팅
+// __dirname 설정
 const __filename = fileURLToPath(import.meta.url)
 const __dirname  = path.dirname(__filename)
 
 // SICK Compact Format 파서: Buffer → [{x,y,z},…]
 function parseCompactBuffer(buf) {
   let offset = 0
+
   // ── Header (32 bytes) ──
   const header = {
     startOfFrame:      buf.readUInt32LE(offset),
@@ -27,12 +27,12 @@ function parseCompactBuffer(buf) {
   const modules = []
   let moduleSize = header.sizeModule0
 
-  // ── 모듈 루프
+  // ── Modules loop ──
   while (moduleSize > 0 && offset + moduleSize <= buf.length) {
     const modStart = offset
     const meta = {}
 
-    // 메타데이터 읽기
+    // Metadata
     meta.SegmentCounter = Number(buf.readBigUInt64LE(offset)); offset += 8
     meta.FrameNumber    = Number(buf.readBigUInt64LE(offset)); offset += 8
     meta.SenderId       = buf.readUInt32LE(offset);            offset += 4
@@ -42,24 +42,27 @@ function parseCompactBuffer(buf) {
 
     const L = meta.numberOfLines
     // per-line arrays
-    meta.timeStampStart = Array.from({ length: L }, (_,i) =>
-      Number(buf.readBigUInt64LE(offset + 8*i))
-    )
-    offset += 8 * L
-    meta.timeStampStop = Array.from({ length: L }, (_,i) =>
+    meta.timeStampStart = Array.from({ length: L }, (_, i) =>
       Number(buf.readBigUInt64LE(offset + 8*i))
     )
     offset += 8 * L
 
-    meta.phi = Array.from({ length: L }, (_,i) =>
+    meta.timeStampStop = Array.from({ length: L }, (_, i) =>
+      Number(buf.readBigUInt64LE(offset + 8*i))
+    )
+    offset += 8 * L
+
+    meta.phi = Array.from({ length: L }, (_, i) =>
       buf.readFloatLE(offset + 4*i)
     )
     offset += 4 * L
-    meta.thetaStart = Array.from({ length: L }, (_,i) =>
+
+    meta.thetaStart = Array.from({ length: L }, (_, i) =>
       buf.readFloatLE(offset + 4*i)
     )
     offset += 4 * L
-    meta.thetaStop = Array.from({ length: L }, (_,i) =>
+
+    meta.thetaStop = Array.from({ length: L }, (_, i) =>
       buf.readFloatLE(offset + 4*i)
     )
     offset += 4 * L
@@ -68,12 +71,12 @@ function parseCompactBuffer(buf) {
     meta.distanceScalingFactor = buf.readFloatLE(offset); offset += 4
     const nextModuleSize        = buf.readUInt32LE(offset); offset += 4
 
-    // data-content 플래그
+    // data-content flags + Reserved(2 bytes)
     const dataContentEchos = buf.readUInt8(offset++)
     const dataContentBeams = buf.readUInt8(offset++)
-    offset++ // reserved
+    offset += 2  // ← Reserved 필드 2바이트 정확히 건너뛰기
 
-    // ── 빔 데이터 읽기
+    // Measurement data 읽기
     const beams = Array.from({ length: L }, () => Array(meta.beamsPerLine))
     for (let beamIdx = 0; beamIdx < meta.beamsPerLine; beamIdx++) {
       for (let line = 0; line < L; line++) {
@@ -96,7 +99,6 @@ function parseCompactBuffer(buf) {
           const a_uint = buf.readUInt16LE(offset); offset += 2
           tuple.theta  = (a_uint - 16384) / 5215
         } else {
-          // direct azimuth 미제공 시 thetaStart/Stop 으로 보간
           const θ0 = meta.thetaStart[line]
           const θ1 = meta.thetaStop[line]
           tuple.theta = θ0 + beamIdx * (θ1 - θ0) / (meta.beamsPerLine - 1)
@@ -110,13 +112,13 @@ function parseCompactBuffer(buf) {
     offset    = modStart + moduleSize
   }
 
-  // ── 3D 포인트 계산
+  // ── 3D 포인트 계산 및 반환 ──
   return modules.flatMap(mod =>
     mod.beams.flatMap((line, lineIdx) =>
       line.map(pt => {
         const d      = pt.dist0 * mod.metadata.distanceScalingFactor
-        const vAng   = mod.metadata.phi[lineIdx] || 0   // vertical
-        const hAng   = pt.theta                         // horizontal
+        const vAng   = mod.metadata.phi[lineIdx] || 0
+        const hAng   = pt.theta
         const cosV   = Math.cos(vAng)
         return {
           x: d * cosV * Math.cos(hAng),
@@ -128,7 +130,7 @@ function parseCompactBuffer(buf) {
   )
 }
 
-// ── 서버 세팅
+// ── 서버 설정 ──
 const udpSocket = dgram.createSocket('udp4')
 udpSocket.bind(2115)
 
