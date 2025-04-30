@@ -5,168 +5,91 @@ import { Server } from 'socket.io'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
+// __dirname 설정
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const UDP_PORT = 2115
-const HTTP_PORT = 3000
+// UDP 리스너
 const udpSocket = dgram.createSocket('udp4')
+udpSocket.bind(2115)
+
+// Express + HTTP + WebSocket
 const app = express()
-const server = http.createServer(app)
-const io = new Server(server, {
-  cors: { origin: "*" }
-})
+const httpServer = http.createServer(app)
+const io = new Server(httpServer, { cors: { origin: '*' } })
 
-// Static 파일 서빙
+// 정적 파일 제공
 app.use(express.static(path.join(__dirname, 'public')))
-
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'))
 })
 
-// WebSocket 이벤트 처리
-io.on('connection', (socket) => {
-  console.log('[WebSocket] Client connected')
+// 클라이언트 연결
+io.on('connection', socket => {
+  console.log('Client connected:', socket.id)
 })
 
-// UDP 수신 및 WebSocket 전달
+// UDP 메시지 수신 → 파싱 → WebSocket 전송
 udpSocket.on('message', (msg, rinfo) => {
-  console.log(`[UDP] Message from ${rinfo.address}:${rinfo.port} (${msg.length} bytes)`)
-
+  console.log(`UDP ${rinfo.address}:${rinfo.port} ${msg.length} bytes`)
   const points = parseCompactFormat(msg)
-  if (points.length > 0) {
-    console.log(`[WebSocket] Sending ${points.length} points`)
-    io.emit('lidar-points', points)
-  } else {
-    console.log(`[WebSocket] No valid points`)
-  }
+  console.log(`Sending ${points.length} points`)
+  io.emit('lidar-points', points)
 })
 
-udpSocket.bind(UDP_PORT)
-server.listen(HTTP_PORT, () => {
-  console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`)
+// 서버 시작
+httpServer.listen(3000, () => {
+  console.log('HTTP on http://localhost:3000')
 })
 
-io.on('connection', (socket) => {
-  console.log('[WebSocket] Client connected');
-});
+// Compact Format 파서
+function parseCompactFormat(buf) {
+  let o = 0
+  // 프레임 시작 검사
+  if (buf.readUInt32BE(o) !== 0x02020202) return []
+  o += 4 + 4 + 8 + 8 + 4 + 4 + 8 + 8 + 4
 
-httpServer.listen(HTTP_PORT, () => {
-  console.log(`[HTTP] Server listening on http://localhost:${HTTP_PORT}`);
-});
+  // 모듈 메타데이터
+  const nL = buf.readUInt32LE(o); o += 4
+  const nB = buf.readUInt32LE(o); o += 4
+  o += 4 + nL * 8 * 2
 
-
-// Compact Format 파서 (SICK 문서 기반)
-function parseCompactFormat(buffer) {
-  let offset = 0;
-
-  // === Compact Frame Header (32 bytes) ===
-  const startOfFrame = buffer.readUInt32BE(offset); offset += 4;
-  if (startOfFrame !== 0x02020202) {
-    console.error("Invalid start of frame");
-    return [];
+  // 각 라인별 elevation
+  const phi = []
+  for (let i = 0; i < nL; i++) {
+    phi.push(buf.readFloatLE(o)); o += 4
   }
+  o += nL * 4 * 2
 
-  const commandId = buffer.readUInt32LE(offset); offset += 4;
-  const telegramCounter = buffer.readBigUInt64LE(offset); offset += 8;
-  const timeStampTransmit = buffer.readBigUInt64LE(offset); offset += 8;
-  const telegramVersion = buffer.readUInt32LE(offset); offset += 4;
-  const sizeModule0 = buffer.readUInt32LE(offset); offset += 4;
+  // 거리 스케일
+  const scale = buf.readFloatLE(o); o += 4
+  o += 4 + 1
+  const ech = buf.readUInt8(o); o += 1
+  const bm  = buf.readUInt8(o); o += 1
+  o += 1
 
-  // === Module Metadata ===
-  const segmentCounter = buffer.readBigUInt64LE(offset); offset += 8;
-  const frameNumber = buffer.readBigUInt64LE(offset); offset += 8;
-  const senderId = buffer.readUInt32LE(offset); offset += 4;
-  const numberOfLinesInModule = buffer.readUInt32LE(offset); offset += 4;
-  const numberOfBeamsPerScan = buffer.readUInt32LE(offset); offset += 4;
-  const numberOfEchosPerBeam = buffer.readUInt32LE(offset); offset += 4;
+  const hasD = !!(ech & 1), hasR = !!(ech & 2)
+  const hasP = !!(bm  & 1), hasT = !!(bm  & 2)
+  const pts = []
 
-  const timeStampStart = [];
-  const timeStampStop = [];
-  const phiArray = [];
-  const thetaStartArray = [];
-  const thetaStopArray = [];
+  // 데이터 파싱
+  for (let l = 0; l < nL; l++) {
+    const p = phi[l]
+    for (let b = 0; b < nB; b++) {
+      let d = 0
+      if (hasD) { d = buf.readUInt16LE(o) * scale; o += 2 }
+      if (hasR) o += 2
+      if (hasP) o += 1
+      let t = 0
+      if (hasT) { t = (buf.readUInt16LE(o) - 16384) / 5215; o += 2 }
 
-  // TimeStampStart (µs)
-  for (let i = 0; i < numberOfLinesInModule; i++) {
-    timeStampStart.push(buffer.readBigUInt64LE(offset)); offset += 8;
-  }
+      // Polar→Cartesian
+      const x = d * Math.cos(p) * Math.cos(t)
+      const y = d * Math.cos(p) * Math.sin(t)
+      const z = d * Math.sin(p)
 
-  // TimeStampStop (µs)
-  for (let i = 0; i < numberOfLinesInModule; i++) {
-    timeStampStop.push(buffer.readBigUInt64LE(offset)); offset += 8;
-  }
-
-  // Phi (Elevation angles, radians)
-  for (let i = 0; i < numberOfLinesInModule; i++) {
-    phiArray.push(buffer.readFloatLE(offset)); offset += 4;
-  }
-
-  // ThetaStart (Azimuth angles, radians)
-  for (let i = 0; i < numberOfLinesInModule; i++) {
-    thetaStartArray.push(buffer.readFloatLE(offset)); offset += 4;
-  }
-
-  // ThetaStop (Azimuth angles, radians)
-  for (let i = 0; i < numberOfLinesInModule; i++) {
-    thetaStopArray.push(buffer.readFloatLE(offset)); offset += 4;
-  }
-
-  // DistanceScalingFactor
-  const distanceScalingFactor = buffer.readFloatLE(offset); offset += 4;
-
-  // NextModuleSize (이번 예시에서는 사용하지 않음)
-  offset += 4;
-
-  // Reserved
-  offset += 1;
-
-  // DataContentEchos & DataContentBeams
-  const dataContentEchos = buffer.readUInt8(offset); offset += 1;
-  const dataContentBeams = buffer.readUInt8(offset); offset += 1;
-
-  offset += 1; // Reserved 추가 바이트
-
-  // Echo 구성 정보 (거리와 RSSI)
-  const hasDistance = (dataContentEchos & 0x01) !== 0;
-  const hasRSSI = (dataContentEchos & 0x02) !== 0;
-
-  // Beam 구성 정보 (특성과 각도)
-  const hasProperties = (dataContentBeams & 0x01) !== 0;
-  const hasAzimuthAngle = (dataContentBeams & 0x02) !== 0;
-
-  const points = [];
-
-  for (let beamIdx = 0; beamIdx < numberOfBeamsPerScan; beamIdx++) {
-    for (let lineIdx = 0; lineIdx < numberOfLinesInModule; lineIdx++) {
-      const phi = phiArray[lineIdx];
-
-      let distance = 0;
-      if (hasDistance) {
-        const distanceRaw = buffer.readUInt16LE(offset); offset += 2;
-        distance = distanceRaw * distanceScalingFactor;
-      }
-
-      if (hasRSSI) offset += 2; // RSSI는 현재 사용하지 않음
-      if (hasProperties) offset += 1; // Properties도 현재 사용하지 않음
-
-      let theta = 0;
-      if (hasAzimuthAngle) {
-        const thetaRaw = buffer.readUInt16LE(offset); offset += 2;
-        theta = (thetaRaw - 16384) / 5215; // radians로 변환
-      }
-
-      // 좌표 변환 (Polar → Cartesian)
-      const x = distance * Math.cos(phi) * Math.cos(theta);
-      const y = distance * Math.cos(phi) * Math.sin(theta);
-      const z = distance * Math.sin(phi);
-
-      // 유효한 거리만 점으로 표시 (100mm ~ 120000mm)
-      if (distance > 100 && distance < 120000) {
-        points.push({ x, y, z });
-      }
+      if (d > 100 && d < 120000) pts.push({ x, y, z })
     }
   }
-
-  return points;
+  return pts
 }
