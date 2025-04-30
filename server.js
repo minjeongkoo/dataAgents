@@ -9,14 +9,121 @@ import { fileURLToPath } from 'url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-// UDP 리스너
+// Compact Format 파서: Buffer → 포인트 배열
+function parseCompactBuffer(buf) {
+  let offset = 0
+
+  // 헤더 (32 bytes)
+  const header = {
+    startOfFrame:       buf.readUInt32LE(offset),
+    commandId:          buf.readUInt32LE(offset += 4),
+    telegramCounter:    Number(buf.readBigUInt64LE(offset += 4)),
+    timeStampTransmit:  Number(buf.readBigUInt64LE(offset += 8)),
+    telegramVersion:    buf.readUInt32LE(offset += 8),
+    sizeModule0:        buf.readUInt32LE(offset += 4),
+  }
+  offset += 4
+
+  const modules = []
+  let moduleSize = header.sizeModule0
+
+  // 모듈 루프
+  while (moduleSize > 0 && offset + moduleSize <= buf.length) {
+    const modStart = offset
+    const meta = {}
+
+    // 메타데이터
+    meta.SegmentCounter = Number(buf.readBigUInt64LE(offset)); offset += 8
+    meta.FrameNumber    = Number(buf.readBigUInt64LE(offset)); offset += 8
+    meta.SenderId       = buf.readUInt32LE(offset);            offset += 4
+    meta.numberOfLines  = buf.readUInt32LE(offset);            offset += 4
+    meta.beamsPerLine   = buf.readUInt32LE(offset);            offset += 4
+    meta.echoesPerBeam  = buf.readUInt32LE(offset);            offset += 4
+
+    const L = meta.numberOfLines
+    meta.timeStampStart = Array.from({ length: L }, (_,i) =>
+      Number(buf.readBigUInt64LE(offset + 8*i))
+    )
+    offset += 8 * L
+
+    meta.timeStampStop  = Array.from({ length: L }, (_,i) =>
+      Number(buf.readBigUInt64LE(offset + 8*i))
+    )
+    offset += 8 * L
+
+    meta.phi = Array.from({ length: L }, (_,i) =>
+      buf.readFloatLE(offset + 4*i)
+    )
+    offset += 4 * L
+
+    meta.thetaStart = Array.from({ length: L }, (_,i) =>
+      buf.readFloatLE(offset + 4*i)
+    )
+    offset += 4 * L
+
+    meta.thetaStop = Array.from({ length: L }, (_,i) =>
+      buf.readFloatLE(offset + 4*i)
+    )
+    offset += 4 * L
+
+    meta.distanceScalingFactor = buf.readFloatLE(offset); offset += 4
+    const nextModuleSize        = buf.readUInt32LE(offset); offset += 4
+
+    const dataContentEchos = buf.readUInt8(offset++)
+    const dataContentBeams = buf.readUInt8(offset++)
+    offset++ // reserved
+
+    // 빔 데이터 읽기
+    const beams = Array.from({ length: L }, () => Array(meta.beamsPerLine).fill(null))
+    for (let beamIdx = 0; beamIdx < meta.beamsPerLine; beamIdx++) {
+      for (let line = 0; line < L; line++) {
+        const tuple = {}
+        // 에코별
+        for (let echo = 0; echo < meta.echoesPerBeam; echo++) {
+          if (dataContentEchos & 0x01) {
+            tuple[`dist${echo}`] = buf.readUInt16LE(offset); offset += 2
+          }
+          if (dataContentEchos & 0x02) {
+            tuple[`rssi${echo}`] = buf.readUInt16LE(offset); offset += 2
+          }
+        }
+        // 빔별
+        if (dataContentBeams & 0x01) {
+          tuple.properties = buf.readUInt8(offset++)
+        }
+        if (dataContentBeams & 0x02) {
+          const a_uint = buf.readUInt16LE(offset); offset += 2
+          tuple.theta  = (a_uint - 16384) / 5215
+        }
+        beams[line][beamIdx] = tuple
+      }
+    }
+
+    modules.push({ metadata: meta, beams, nextModuleSize })
+    moduleSize = nextModuleSize
+    offset    = modStart + moduleSize
+  }
+
+  // 포인트 배열(flat)
+  return modules.flatMap(mod =>
+    mod.beams.flatMap(line =>
+      line.map(pt => {
+        const d     = pt.dist0 * mod.metadata.distanceScalingFactor
+        const angle = pt.theta + (mod.metadata.phi[0] || 0)
+        return { x: d * Math.cos(angle), y: d * Math.sin(angle) }
+      })
+    )
+  )
+}
+
+// UDP 소켓
 const udpSocket = dgram.createSocket('udp4')
 udpSocket.bind(2115)
 
-// Express + HTTP + WebSocket
-const app = express()
+// Express + HTTP + Socket.IO
+const app        = express()
 const httpServer = http.createServer(app)
-const io = new Server(httpServer, { cors: { origin: '*' } })
+const io         = new Server(httpServer, { cors: { origin: '*' } })
 
 // 정적 파일 제공
 app.use(express.static(path.join(__dirname, 'public')))
@@ -29,14 +136,16 @@ io.on('connection', socket => {
   console.log('Client connected:', socket.id)
 })
 
-// UDP 메시지 수신 → 파싱 → WebSocket 전송
+// UDP 수신 시 파싱 → 전송
 udpSocket.on('message', (msg, rinfo) => {
-
-  console.log('--- RAW UDP BUFFER (hex) ---');
-  console.log(msg.toString('hex'));
-  
   console.log(`UDP ${rinfo.address}:${rinfo.port} ${msg.length} bytes`)
-  const points = parseCompactFormat(msg)
+  let points = []
+  try {
+    points = parseCompactBuffer(msg)
+  } catch (err) {
+    console.error('Parsing error:', err)
+    return
+  }
   console.log(`Sending ${points.length} points`)
   io.emit('lidar-points', points)
 })
@@ -45,52 +154,3 @@ udpSocket.on('message', (msg, rinfo) => {
 httpServer.listen(3000, () => {
   console.log('HTTP on http://localhost:3000')
 })
-
-// Compact Format 파서
-function parseCompactFormat(buf) {
-  let o = 0
-  if (buf.readUInt32BE(o) !== 0x02020202) return []
-  o += 4 + 4 + 8 + 8 + 4 + 4 + 8 + 8 + 4
-
-  const nL = buf.readUInt32LE(o); o += 4
-  const nB = buf.readUInt32LE(o); o += 4
-  o += 4 + nL * 8 * 2
-
-  const phi = []
-  for (let i = 0; i < nL; i++) {
-    phi.push(buf.readFloatLE(o)); o += 4
-  }
-  o += nL * 4 * 2
-
-  const scale = buf.readFloatLE(o); o += 4
-  o += 4 + 1
-  const ech = buf.readUInt8(o); o += 1
-  const bm  = buf.readUInt8(o); o += 1
-  o += 1
-
-  const hasD = !!(ech & 1), hasR = !!(ech & 2)
-  const hasP = !!(bm  & 1), hasT = !!(bm  & 2)
-  const pts = []
-
-  for (let layer = 0; layer < nL; layer++) {
-    const p = phi[layer]
-    for (let b = 0; b < nB; b++) {
-      let d = 0
-      if (hasD) { d = buf.readUInt16LE(o) * scale; o += 2 }
-      if (hasR) o += 2
-      if (hasP) o += 1
-      let t = 0
-      if (hasT) { t = (buf.readUInt16LE(o) - 16384) / 5215; o += 2 }
-
-      const x = d * Math.cos(p) * Math.cos(t)
-      const y = d * Math.cos(p) * Math.sin(t)
-      const z = d * Math.sin(p)
-
-      if (d > 100 && d < 120000) {
-        pts.push({ x, y, z, layer })
-      }
-    }
-  }
-  return pts
-}
-
