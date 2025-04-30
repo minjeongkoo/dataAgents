@@ -31,6 +31,10 @@ io.on('connection', socket => {
 
 // UDP 메시지 수신 → 파싱 → WebSocket 전송
 udpSocket.on('message', (msg, rinfo) => {
+
+  console.log('--- RAW UDP BUFFER (hex) ---');
+  console.log(msg.toString('hex'));
+  
   console.log(`UDP ${rinfo.address}:${rinfo.port} ${msg.length} bytes`)
   const points = parseCompactFormat(msg)
   console.log(`Sending ${points.length} points`)
