@@ -2,72 +2,51 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>SICK LiDAR 3D</title>
+  <title>LiDAR Viewer</title>
   <style>
-    html, body { margin: 0; overflow: hidden; width: 100%; height: 100%; background: #000; }
-    canvas { display: block; }
+    body { margin:0; overflow:hidden; }
+    canvas { display:block; }
   </style>
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js"
-    }
-  }
-  </script>
 </head>
 <body>
-  <script src="/socket.io/socket.io.js"></script>
-
   <script type="module">
-    import * as THREE from 'three'
-    import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/controls/OrbitControls.js'
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
 
-    const scene    = new THREE.Scene()
-    const cam      = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 100)
-    cam.position.set(0, 0, 5)
-    const rend     = new THREE.WebGLRenderer({ antialias: true })
-    rend.setSize(innerWidth, innerHeight)
-    document.body.appendChild(rend.domElement)
+    // Scene / Camera / Renderer
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 100);
+    camera.position.set(0,0,5);
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
 
-    const ctrl     = new OrbitControls(cam, rend.domElement)
-    ctrl.enableDamping = true
+    // BufferGeometry
+    const MAX = 100000;
+    const positions = new Float32Array(MAX * 3);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({ size:0.02 });
+    scene.add(new THREE.Points(geom, mat));
 
-    const geom      = new THREE.BufferGeometry()
-    const mat       = new THREE.PointsMaterial({ size: 0.02, color: 0x00ff00 })
-    const pointCloud= new THREE.Points(geom, mat)
-    scene.add(pointCloud)
-
-    let allPos = []  // [x,y,z, x,y,z, ...]
-
-    function updateCloud() {
-      const arr = new Float32Array(allPos)
-      geom.setAttribute('position', new THREE.BufferAttribute(arr, 3))
-      geom.attributes.position.needsUpdate = true
-      geom.computeBoundingSphere()
-    }
-
-    function animate() {
-      requestAnimationFrame(animate)
-      ctrl.update()
-      rend.render(scene, cam)
-    }
-    animate()
-
-    const socket = io()
-    socket.on('lidar-points', pts => {
-      for (const p of pts) {
-        if (Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z)) {
-          allPos.push(p.x, p.y, p.z)
-        }
+    // WebSocket → localhost:3000
+    const ws = new WebSocket(`ws://${location.host}`);
+    ws.onmessage = ({ data }) => {
+      const arr = JSON.parse(data);
+      const len = Math.min(arr.length, MAX);
+      for (let i=0; i<len; i++) {
+        positions[i*3]   = arr[i].x;
+        positions[i*3+1] = arr[i].y;
+        positions[i*3+2] = arr[i].z;
       }
-      updateCloud()
-    })
+      geom.setDrawRange(0, len);
+      geom.attributes.position.needsUpdate = true;
+    };
 
-    window.addEventListener('resize', () => {
-      cam.aspect = innerWidth/innerHeight
-      cam.updateProjectionMatrix()
-      rend.setSize(innerWidth, innerHeight)
-    })
+    // 렌더 루프
+    (function animate(){
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    })();
   </script>
 </body>
 </html>
