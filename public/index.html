@@ -10,10 +10,11 @@
 </head>
 <body>
   <script type="module">
+    // -- CDN으로 직접 불러오기: 세 가지 버전 번호를 꼭 맞춰주세요 --
     import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
     import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/controls/OrbitControls.js';
 
-    // --- 1) Scene/Camera/Renderer ---
+    // 1) Scene / Camera / Renderer
     const scene    = new THREE.Scene();
     const camera   = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 100);
     camera.position.set(0, 0, 5);
@@ -21,33 +22,29 @@
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // OrbitControls 로 자유 시점 지원
+    // 2) OrbitControls (마우스 드래그로 자유 시점)
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
 
-    // --- 2) PointCloud 준비 (position + color) ---
+    // 3) 포인트 클라우드용 버퍼: position + color
     const MAX_POINTS = 1000000;
     const positions  = new Float32Array(MAX_POINTS * 3);
     const colors     = new Float32Array(MAX_POINTS * 3);
     const geometry   = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color',    new THREE.BufferAttribute(colors,    3));
-    const material = new THREE.PointsMaterial({
-      size: 0.02,
-      vertexColors: true
-    });
+    const material = new THREE.PointsMaterial({ size: 0.02, vertexColors: true });
     const pointCloud = new THREE.Points(geometry, material);
     scene.add(pointCloud);
 
-    // 임시 컬러 객체
     const colorTmp = new THREE.Color();
 
-    // --- 3) 세그먼트 누적 버퍼 설정 (360° 완주용) ---
-    const SEGMENTS_PER_FRAME = 6; // 센서 한 회전당 전송 모듈 수
+    // 4) 360° 완주용 세그먼트 누적
+    const SEGMENTS_PER_FRAME = 6;
     let segmentCount  = 0;
     let framePoints   = [];
 
-    // --- 4) WebSocket 연결 & 메시지 핸들링 ---
+    // 5) WebSocket 연결
     const ws = new WebSocket(`ws://${location.host}`);
     ws.onopen    = () => console.log('WS opened');
     ws.onerror   = e => console.error('WS error', e);
@@ -57,27 +54,25 @@
       segmentCount++;
       if (segmentCount >= SEGMENTS_PER_FRAME) {
         updatePointCloud(framePoints);
-        // 다음 회전을 위해 초기화
-        framePoints  = [];
-        segmentCount = 0;
+        framePoints   = [];
+        segmentCount  = 0;
       }
     };
 
-    // --- 5) PointCloud 업데이트 함수 ---
+    // 6) 포인트 클라우드 업데이트
     function updatePointCloud(arr) {
-      // 레이어 개수 동적으로 계산
       const maxLayer = arr.reduce((m,p) => p.layer > m ? p.layer : m, 0);
       const layerCount = maxLayer + 1;
-
       const len = Math.min(arr.length, MAX_POINTS);
+
       for (let i = 0; i < len; i++) {
         const p = arr[i];
-        // 위치
         positions[i*3]   = p.x;
         positions[i*3+1] = p.y;
         positions[i*3+2] = p.z;
-        // 레이어별 색상 (HSL → RGB)
-        const h = p.layer / (layerCount - 1);
+
+        // 레이어별 HSL → RGB 매핑
+        const h = layerCount>1 ? p.layer / (layerCount - 1) : 0;
         colorTmp.setHSL(h, 1.0, 0.5);
         colors[i*3]   = colorTmp.r;
         colors[i*3+1] = colorTmp.g;
@@ -89,13 +84,12 @@
       geometry.attributes.color.needsUpdate    = true;
     }
 
-    // --- 6) 렌더 루프 & 리사이즈 처리 ---
+    // 7) 렌더 루프 & 리사이즈
     (function animate() {
       requestAnimationFrame(animate);
       controls.update();
       renderer.render(scene, camera);
     })();
-
     window.addEventListener('resize', () => {
       camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
