@@ -92,6 +92,8 @@ function parseCompactFormat(buffer) {
   const thetaStartArray = [];
   const thetaStopArray = [];
 
+  console.log(`[DEBUG] point loop: lines=${numberOfLinesInModule}, beams=${numberOfBeamsPerScan}`);
+
   for (let i = 0; i < numberOfLinesInModule; i++) {
     phiArray.push(buffer.readFloatLE(offset)); offset += 4;
   }
@@ -102,6 +104,8 @@ function parseCompactFormat(buffer) {
     thetaStopArray.push(buffer.readFloatLE(offset)); offset += 4;
   }
 
+  console.log(`→ distanceRaw=${distanceRaw}, scaled=${distance}, thetaRaw=${thetaRaw}, theta=${theta.toFixed(2)}`);
+
   const distanceScalingFactor = buffer.readFloatLE(offset); offset += 4;
   const nextModuleSize = buffer.readUInt32LE(offset); offset += 4;
   offset += 4; // Reserved + DataContentEchos + DataContentBeams + Reserved
@@ -111,6 +115,9 @@ function parseCompactFormat(buffer) {
   for (let beam = 0; beam < numberOfBeamsPerScan; beam++) {
     for (let line = 0; line < numberOfLinesInModule; line++) {
       const distanceRaw = buffer.readUInt16LE(offset); offset += 2;
+
+      console.log(`[DEBUG] distanceRaw: ${distanceRaw}, scaled: ${distance}`);
+
       const rssi = buffer.readUInt16LE(offset); offset += 2;
       const properties = buffer.readUInt8(offset); offset += 1;
       const thetaRaw = buffer.readUInt16LE(offset); offset += 2;
@@ -123,7 +130,7 @@ function parseCompactFormat(buffer) {
       const y = distance * Math.cos(phi) * Math.sin(theta);
       const z = distance * Math.sin(phi);
 
-      if (distance > 100 && distance < 120000) {
+      if (distance > 0 && distance < 200000) {
         points.push({ x, y, z });
       }
     }
