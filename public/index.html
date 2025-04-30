@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>LiDAR Viewer (Compact Full Scan)</title>
+  <title>LiDAR Full-Scan Viewer</title>
   <style>
-    body { margin:0; overflow:hidden; }
+    body { margin:0; overflow:hidden; background:#000; }
     canvas { display:block; }
   </style>
 </head>
@@ -12,7 +12,7 @@
   <script type="module">
     import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
 
-    // Scene / Camera / Renderer
+    // --- 1) Three.js 기본 세팅 ---
     const scene    = new THREE.Scene();
     const camera   = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 100);
     camera.position.set(0, 0, 5);
@@ -20,39 +20,55 @@
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // BufferGeometry 준비
-    const MAX = 1000000; // 충분히 크게 잡아두세요
-    const pos = new Float32Array(MAX * 3);
-    const geom = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    const mat = new THREE.PointsMaterial({ size: 0.02 });
-    const pts = new THREE.Points(geom, mat);
-    scene.add(pts);
+    // --- 2) 점군 버퍼 준비 ---
+    const MAX_POINTS = 1000000;               // 충분히 크게 잡아두세요
+    const positions  = new Float32Array(MAX_POINTS * 3);
+    const geometry   = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const material   = new THREE.PointsMaterial({ size:0.02 });
+    const pointCloud = new THREE.Points(geometry, material);
+    scene.add(pointCloud);
 
-    // WebSocket 연결
+    // --- 3) 세그먼트 누적용 버퍼 ---
+    const SEGMENTS_PER_FRAME = 6;             // 한 바퀴를 채우는 모듈(세그먼트) 수에 맞춰 조정
+    let segmentCount       = 0;
+    let framePoints        = [];
+
+    // --- 4) WebSocket 연결 ---
     const ws = new WebSocket(`ws://${location.host}`);
-    ws.onopen  = () => console.log('WS opened');
-    ws.onerror = e => console.error(e);
+    ws.onopen    = () => console.log('WS opened');
+    ws.onerror   = e => console.error('WS error', e);
     ws.onmessage = ({ data }) => {
-      const arr = JSON.parse(data);
-      console.log(`Received ${arr.length} points`);
-      // 전체 그리기
-      const len = Math.min(arr.length, MAX);
-      for (let i = 0; i < len; i++) {
-        pos[i*3]   = arr[i].x;
-        pos[i*3+1] = arr[i].y;
-        pos[i*3+2] = arr[i].z;
+      const pts = JSON.parse(data);           // 서버에서 x,y,z 리스트를 받음
+      framePoints.push(...pts);
+      segmentCount++;
+
+      // 원하는 개수만큼 세그먼트가 모이면 전체 프레임으로 렌더
+      if (segmentCount >= SEGMENTS_PER_FRAME) {
+        updatePointCloud(framePoints);
+        // 다음 프레임을 위해 초기화
+        framePoints   = [];
+        segmentCount  = 0;
       }
-      geom.setDrawRange(0, len);
-      geom.attributes.position.needsUpdate = true;
     };
 
-    // 렌더 루프
-    (function render() {
-      requestAnimationFrame(render);
+    // --- 5) 포인트클라우드 업데이터 ---
+    function updatePointCloud(arr) {
+      const len = Math.min(arr.length, MAX_POINTS);
+      for (let i = 0; i < len; i++) {
+        positions[i*3]   = arr[i].x;
+        positions[i*3+1] = arr[i].y;
+        positions[i*3+2] = arr[i].z;
+      }
+      geometry.setDrawRange(0, len);
+      geometry.attributes.position.needsUpdate = true;
+    }
+
+    // --- 6) 렌더 루프 & 리사이즈 처리 ---
+    (function animate() {
+      requestAnimationFrame(animate);
       renderer.render(scene, camera);
     })();
-
     window.addEventListener('resize', () => {
       camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
