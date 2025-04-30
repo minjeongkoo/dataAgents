@@ -98,31 +98,31 @@ function parseCompact(buffer) {
     const m = buffer.slice(offset, offset + moduleSize);
 
     // --- metadata ---
-    const numLines = m.readUInt32LE(20);
+    const numLayers = m.readUInt32LE(20);
     const numBeams = m.readUInt32LE(24);
     const numEchos = m.readUInt32LE(28);
     let mo = 32;
 
-    // skip TimeStampStart/Stop (16 bytes * numLines)
-    mo += numLines * 16;
+    // skip TimeStampStart/Stop (16 bytes * numLayers)
+    mo += numLayers * 16;
 
     // Phi
-    const phi = Array.from({ length: numLines }, (_, i) =>
+    const phiArray = Array.from({ length: numLayers }, (_, i) =>
       m.readFloatLE(mo + 4 * i)
     );
-    mo += 4 * numLines;
+    mo += 4 * numLayers;
 
     // ThetaStart
-    const thetaStart = Array.from({ length: numLines }, (_, i) =>
+    const thetaStart = Array.from({ length: numLayers }, (_, i) =>
       m.readFloatLE(mo + 4 * i)
     );
-    mo += 4 * numLines;
+    mo += 4 * numLayers;
 
     // ThetaStop
-    const thetaStop = Array.from({ length: numLines }, (_, i) =>
+    const thetaStop = Array.from({ length: numLayers }, (_, i) =>
       m.readFloatLE(mo + 4 * i)
     );
-    mo += 4 * numLines;
+    mo += 4 * numLayers;
 
     // scaling factor
     const scaling = m.readFloatLE(mo);
@@ -144,32 +144,29 @@ function parseCompact(buffer) {
     const beamAngleSize = (dataContentBeams & 2) ? 2 : 0;
     const beamSize      = echoSize * numEchos + beamPropSize + beamAngleSize;
 
-    // --- 점 읽기 (layer × beam × echo) ---
-    for (let i = 0; i < numLines; i++) {
-      const φ    = phi[i];
-      const θ0   = thetaStart[i];
-      const θend = thetaStop[i];
-      const layerPoints = [];
-      
-      for (let j = 0; j < numBeams; j++) {
-        const base = mo + (i * numBeams + j) * beamSize;
-        for (let e = 0; e < numEchos; e++) {
+    // --- 점 읽기 (beam × layer × echo) ---
+    for (let beamIdx = 0; beamIdx < numBeams; beamIdx++) {
+      for (let layerIdx = 0; layerIdx < numLayers; layerIdx++) {
+        const base = mo + (layerIdx * numBeams + beamIdx) * beamSize;
+        
+        for (let echoIdx = 0; echoIdx < numEchos; echoIdx++) {
           const raw = echoSize > 0
-            ? m.readUInt16LE(base + e * echoSize)
+            ? m.readUInt16LE(base + echoIdx * echoSize)
             : 0;
+          
           const d = raw * scaling / 1000; // mm → m
-          const θ = θ0 + j * ((θend - θ0) / (numBeams - 1) || 0);
-          layerPoints.push({ x: d*Math.cos(φ)*Math.cos(θ),
-                            y: d*Math.cos(φ)*Math.sin(θ),
-                            z: d*Math.sin(φ),
-                            layer: i,
-                            channel: e });
+          const φ = phiArray[layerIdx];
+          const θ = thetaStart[layerIdx] + beamIdx * ((thetaStop[layerIdx] - thetaStart[layerIdx]) / (numBeams - 1) || 0);
+          
+          points.push({
+            x: d * Math.cos(φ) * Math.cos(θ),
+            y: d * Math.cos(φ) * Math.sin(θ),
+            z: d * Math.sin(φ),
+            layer: layerIdx,
+            channel: echoIdx
+          });
         }
       }
-      
-      // 각 레이어별로 스무딩 적용
-      const smoothedLayerPoints = smoothPoints(layerPoints);
-      points.push(...smoothedLayerPoints);
     }
 
     // 다음 모듈로
