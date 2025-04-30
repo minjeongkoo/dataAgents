@@ -6,8 +6,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import cors from 'cors';
 
-app.use(cors());
-
 const UDP_PORT = 2115;
 const UDP_HOST = '0.0.0.0';
 const HTTP_PORT = 3000;
@@ -22,6 +20,8 @@ const udpSocket = dgram.createSocket('udp4');
 // Express 및 HTTP 서버 생성
 const app = express();
 const httpServer = http.createServer(app);
+
+app.use(cors());
 
 // socket.io 서버 (CORS 허용)
 const io = new Server(httpServer, {
