@@ -45,23 +45,19 @@ httpServer.listen(3000, () => {
 // Compact Format 파서
 function parseCompactFormat(buf) {
   let o = 0
-  // 프레임 시작 검사
   if (buf.readUInt32BE(o) !== 0x02020202) return []
   o += 4 + 4 + 8 + 8 + 4 + 4 + 8 + 8 + 4
 
-  // 모듈 메타데이터
   const nL = buf.readUInt32LE(o); o += 4
   const nB = buf.readUInt32LE(o); o += 4
   o += 4 + nL * 8 * 2
 
-  // 각 라인별 elevation
   const phi = []
   for (let i = 0; i < nL; i++) {
     phi.push(buf.readFloatLE(o)); o += 4
   }
   o += nL * 4 * 2
 
-  // 거리 스케일
   const scale = buf.readFloatLE(o); o += 4
   o += 4 + 1
   const ech = buf.readUInt8(o); o += 1
@@ -72,9 +68,8 @@ function parseCompactFormat(buf) {
   const hasP = !!(bm  & 1), hasT = !!(bm  & 2)
   const pts = []
 
-  // 데이터 파싱
-  for (let l = 0; l < nL; l++) {
-    const p = phi[l]
+  for (let layer = 0; layer < nL; layer++) {
+    const p = phi[layer]
     for (let b = 0; b < nB; b++) {
       let d = 0
       if (hasD) { d = buf.readUInt16LE(o) * scale; o += 2 }
@@ -83,13 +78,15 @@ function parseCompactFormat(buf) {
       let t = 0
       if (hasT) { t = (buf.readUInt16LE(o) - 16384) / 5215; o += 2 }
 
-      // Polar→Cartesian
       const x = d * Math.cos(p) * Math.cos(t)
       const y = d * Math.cos(p) * Math.sin(t)
       const z = d * Math.sin(p)
 
-      if (d > 100 && d < 120000) pts.push({ x, y, z })
+      if (d > 100 && d < 120000) {
+        pts.push({ x, y, z, layer })
+      }
     }
   }
   return pts
 }
+
