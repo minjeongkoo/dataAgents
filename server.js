@@ -6,15 +6,14 @@ import { Server } from 'socket.io'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
-// __dirname 설정
+// __dirname 세팅
 const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+const __dirname  = path.dirname(__filename)
 
-// Compact Format 파서: Buffer → [{x,y,z},…]
+// SICK Compact Format 파서: Buffer → [{x,y,z},…]
 function parseCompactBuffer(buf) {
   let offset = 0
-
-  // --- Header (32 bytes) ---
+  // ── Header (32 bytes) ──
   const header = {
     startOfFrame:      buf.readUInt32LE(offset),
     commandId:         buf.readUInt32LE(offset += 4),
@@ -28,12 +27,12 @@ function parseCompactBuffer(buf) {
   const modules = []
   let moduleSize = header.sizeModule0
 
-  // --- Modules loop ---
+  // ── 모듈 루프
   while (moduleSize > 0 && offset + moduleSize <= buf.length) {
     const modStart = offset
     const meta = {}
 
-    // Metadata
+    // 메타데이터 읽기
     meta.SegmentCounter = Number(buf.readBigUInt64LE(offset)); offset += 8
     meta.FrameNumber    = Number(buf.readBigUInt64LE(offset)); offset += 8
     meta.SenderId       = buf.readUInt32LE(offset);            offset += 4
@@ -47,7 +46,6 @@ function parseCompactBuffer(buf) {
       Number(buf.readBigUInt64LE(offset + 8*i))
     )
     offset += 8 * L
-
     meta.timeStampStop = Array.from({ length: L }, (_,i) =>
       Number(buf.readBigUInt64LE(offset + 8*i))
     )
@@ -57,27 +55,25 @@ function parseCompactBuffer(buf) {
       buf.readFloatLE(offset + 4*i)
     )
     offset += 4 * L
-
     meta.thetaStart = Array.from({ length: L }, (_,i) =>
       buf.readFloatLE(offset + 4*i)
     )
     offset += 4 * L
-
     meta.thetaStop = Array.from({ length: L }, (_,i) =>
       buf.readFloatLE(offset + 4*i)
     )
     offset += 4 * L
 
-    // scaling & next size
+    // scaling factor & next module size
     meta.distanceScalingFactor = buf.readFloatLE(offset); offset += 4
     const nextModuleSize        = buf.readUInt32LE(offset); offset += 4
 
-    // data content flags
+    // data-content 플래그
     const dataContentEchos = buf.readUInt8(offset++)
     const dataContentBeams = buf.readUInt8(offset++)
     offset++ // reserved
 
-    // Measurement data
+    // ── 빔 데이터 읽기
     const beams = Array.from({ length: L }, () => Array(meta.beamsPerLine))
     for (let beamIdx = 0; beamIdx < meta.beamsPerLine; beamIdx++) {
       for (let line = 0; line < L; line++) {
@@ -91,13 +87,19 @@ function parseCompactBuffer(buf) {
             tuple[`rssi${echo}`] = buf.readUInt16LE(offset); offset += 2
           }
         }
-        // per-beam
+        // properties
         if (dataContentBeams & 0x01) {
           tuple.properties = buf.readUInt8(offset++)
         }
+        // azimuth
         if (dataContentBeams & 0x02) {
           const a_uint = buf.readUInt16LE(offset); offset += 2
           tuple.theta  = (a_uint - 16384) / 5215
+        } else {
+          // direct azimuth 미제공 시 thetaStart/Stop 으로 보간
+          const θ0 = meta.thetaStart[line]
+          const θ1 = meta.thetaStop[line]
+          tuple.theta = θ0 + beamIdx * (θ1 - θ0) / (meta.beamsPerLine - 1)
         }
         beams[line][beamIdx] = tuple
       }
@@ -108,25 +110,25 @@ function parseCompactBuffer(buf) {
     offset    = modStart + moduleSize
   }
 
-  // modules → [{x,y,z},…]
-  return modules.flatMap((mod) =>
+  // ── 3D 포인트 계산
+  return modules.flatMap(mod =>
     mod.beams.flatMap((line, lineIdx) =>
       line.map(pt => {
         const d      = pt.dist0 * mod.metadata.distanceScalingFactor
-        const vAngle = mod.metadata.phi[lineIdx] || 0   // vertical angle
-        const hAngle = pt.theta                          // horizontal angle
-        const cosV   = Math.cos(vAngle)
+        const vAng   = mod.metadata.phi[lineIdx] || 0   // vertical
+        const hAng   = pt.theta                         // horizontal
+        const cosV   = Math.cos(vAng)
         return {
-          x: d * cosV * Math.cos(hAngle),
-          y: d * cosV * Math.sin(hAngle),
-          z: d * Math.sin(vAngle)
+          x: d * cosV * Math.cos(hAng),
+          y: d * cosV * Math.sin(hAng),
+          z: d * Math.sin(vAng)
         }
       })
     )
   )
 }
 
-// --- 서버 설정 ---
+// ── 서버 세팅
 const udpSocket = dgram.createSocket('udp4')
 udpSocket.bind(2115)
 
@@ -139,23 +141,23 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'))
 })
 
-io.on('connection', socket => {
-  console.log('Client connected:', socket.id)
+io.on('connection', sock => {
+  console.log('Client connected:', sock.id)
 })
 
 udpSocket.on('message', (msg, rinfo) => {
   console.log(`UDP ${rinfo.address}:${rinfo.port} ${msg.length} bytes`)
-  let points = []
+  let pts = []
   try {
-    points = parseCompactBuffer(msg)
-  } catch (err) {
-    console.error('Parsing error:', err)
+    pts = parseCompactBuffer(msg)
+    console.log(`→ parsed ${pts.length} points`)
+  } catch (e) {
+    console.error('parse error', e)
     return
   }
-  console.log(`Sending ${points.length} points`)
-  io.emit('lidar-points', points)
+  io.emit('lidar-points', pts)
 })
 
 httpServer.listen(3000, () => {
-  console.log('HTTP on http://localhost:3000')
+  console.log('http://localhost:3000 running')
 })
