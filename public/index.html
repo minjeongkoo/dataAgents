@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>LiDAR Viewer with Logging</title>
+  <title>LiDAR Viewer (Compact Full Scan)</title>
   <style>
     body { margin:0; overflow:hidden; }
     canvas { display:block; }
@@ -12,64 +12,49 @@
   <script type="module">
     import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
 
-    // 1) Scene / Camera / Renderer 세팅
+    // Scene / Camera / Renderer
     const scene    = new THREE.Scene();
     const camera   = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 100);
     camera.position.set(0, 0, 5);
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias:true });
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // 2) BufferGeometry 준비
-    const MAX_POINTS = 100000;
-    const positions  = new Float32Array(MAX_POINTS * 3);
-    const geom       = new THREE.BufferGeometry();
-    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material = new THREE.PointsMaterial({ size: 0.02 });
-    const points   = new THREE.Points(geom, material);
-    scene.add(points);
+    // BufferGeometry 준비
+    const MAX = 1000000; // 충분히 크게 잡아두세요
+    const pos = new Float32Array(MAX * 3);
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.PointsMaterial({ size: 0.02 });
+    const pts = new THREE.Points(geom, mat);
+    scene.add(pts);
 
-    // 3) WebSocket 연결 (localhost:3000)
+    // WebSocket 연결
     const ws = new WebSocket(`ws://${location.host}`);
-    ws.onopen = () => console.log('WebSocket opened');
-    ws.onclose = () => console.log('WebSocket closed');
-    ws.onerror = e => console.error('WebSocket error', e);
-
+    ws.onopen  = () => console.log('WS opened');
+    ws.onerror = e => console.error(e);
     ws.onmessage = ({ data }) => {
-      // JSON 배열로 파싱
       const arr = JSON.parse(data);
-
-      // ─────────────────────────────────────────────────
-      // 여기서 x,y,z 로그를 찍습니다.
       console.log(`Received ${arr.length} points`);
-      // 전체 배열을 한 번에 보고 싶다면 아래처럼:
-      console.log('All points:', arr);
-      // 또는 포인트별로 순회하며 찍고 싶다면:
-      arr.forEach((pt, i) => {
-        console.log(`Point ${i}: x=${pt.x.toFixed(3)}, y=${pt.y.toFixed(3)}, z=${pt.z.toFixed(3)}`);
-      });
-      // ─────────────────────────────────────────────────
-
-      // 포인트클라우드 렌더링 업데이트
-      const len = Math.min(arr.length, MAX_POINTS);
+      // 전체 그리기
+      const len = Math.min(arr.length, MAX);
       for (let i = 0; i < len; i++) {
-        positions[i*3]   = arr[i].x;
-        positions[i*3+1] = arr[i].y;
-        positions[i*3+2] = arr[i].z;
+        pos[i*3]   = arr[i].x;
+        pos[i*3+1] = arr[i].y;
+        pos[i*3+2] = arr[i].z;
       }
       geom.setDrawRange(0, len);
       geom.attributes.position.needsUpdate = true;
     };
 
-    // 4) 렌더 루프
-    (function animate() {
-      requestAnimationFrame(animate);
+    // 렌더 루프
+    (function render() {
+      requestAnimationFrame(render);
       renderer.render(scene, camera);
     })();
 
-    // 창 크기 변경 대응
     window.addEventListener('resize', () => {
-      camera.aspect = innerWidth / innerHeight;
+      camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
     });
