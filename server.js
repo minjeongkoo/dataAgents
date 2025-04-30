@@ -4,6 +4,9 @@ import http from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import cors from 'cors';
+
+app.use(cors());
 
 const UDP_PORT = 2115;
 const UDP_HOST = '0.0.0.0';
@@ -23,8 +26,8 @@ const httpServer = http.createServer(app);
 // socket.io 서버 (CORS 허용)
 const io = new Server(httpServer, {
   cors: {
-    origin: '*', // 또는 'http://localhost:5173' 등 Vue 프론트 URL
-    methods: ['GET', 'POST']
+    origin: "http://localhost:5173", // Vue 앱 주소
+    methods: ["GET", "POST"]
   }
 });
 
