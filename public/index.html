@@ -57,14 +57,57 @@
     const ws = new WebSocket(`ws://${location.host}`);
     ws.onopen    = () => console.log('WS opened');
     ws.onerror   = e => console.error('WS error', e);
+
+    // 7) 렌더 루프 & 리사이즈
+    const RENDER_INTERVAL = 500; // 500ms 간격으로 렌더링 (2 FPS)
+    let lastRenderTime = 0;
+    let isRendering = false;
+
+    function render() {
+      if (!isRendering) return;
+      
+      const currentTime = performance.now();
+      if (currentTime - lastRenderTime >= RENDER_INTERVAL) {
+        controls.update();
+        renderer.render(scene, camera);
+        lastRenderTime = currentTime;
+      }
+      requestAnimationFrame(render);
+    }
+
+    // 렌더링 시작/중지 컨트롤
+    function startRendering() {
+      if (!isRendering) {
+        isRendering = true;
+        lastRenderTime = performance.now();
+        render();
+      }
+    }
+
+    function stopRendering() {
+      isRendering = false;
+    }
+
+    // 초기 렌더링 시작
+    startRendering();
+
+    // 리사이즈 이벤트
+    window.addEventListener('resize', () => {
+      camera.aspect = innerWidth/innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    // WebSocket 메시지 처리 시 렌더링 재시작
     ws.onmessage = ({ data }) => {
       const pts = JSON.parse(data);
       framePoints.push(...pts);
       segmentCount++;
       if (segmentCount >= SEGMENTS_PER_FRAME) {
         updatePointCloud(framePoints);
-        framePoints   = [];
-        segmentCount  = 0;
+        framePoints = [];
+        segmentCount = 0;
+        startRendering(); // 새로운 데이터가 있을 때 렌더링 재시작
       }
     };
 
@@ -99,18 +142,6 @@
       geometry.attributes.position.needsUpdate = true;
       geometry.attributes.color.needsUpdate    = true;
     }
-
-    // 7) 렌더 루프 & 리사이즈
-    (function animate() {
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    })();
-    window.addEventListener('resize', () => {
-      camera.aspect = innerWidth/innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(innerWidth, innerHeight);
-    });
   </script>
 </body>
 </html>
