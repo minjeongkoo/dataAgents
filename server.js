@@ -43,6 +43,39 @@ udp.on('message', buffer => {
   }
 });
 
+function smoothPoints(points, windowSize = 3) {
+  if (points.length < windowSize) return points;
+  
+  const smoothedPoints = [];
+  const halfWindow = Math.floor(windowSize / 2);
+  
+  for (let i = 0; i < points.length; i++) {
+    let sumX = 0, sumY = 0, sumZ = 0;
+    let count = 0;
+    
+    // 주변 포인트들의 평균 계산
+    for (let j = -halfWindow; j <= halfWindow; j++) {
+      const idx = i + j;
+      if (idx >= 0 && idx < points.length) {
+        sumX += points[idx].x;
+        sumY += points[idx].y;
+        sumZ += points[idx].z;
+        count++;
+      }
+    }
+    
+    smoothedPoints.push({
+      x: sumX / count,
+      y: sumY / count,
+      z: sumZ / count,
+      layer: points[i].layer,
+      channel: points[i].channel
+    });
+  }
+  
+  return smoothedPoints;
+}
+
 /**
  * Compact Format Parser
  * - 프레임 헤더(32바이트)에서 SOF, commandId, telegramCounter, timestamp, sizeModule0 파싱
@@ -116,6 +149,8 @@ function parseCompact(buffer) {
       const φ    = phi[i];
       const θ0   = thetaStart[i];
       const θend = thetaStop[i];
+      const layerPoints = [];
+      
       for (let j = 0; j < numBeams; j++) {
         const base = mo + (i * numBeams + j) * beamSize;
         for (let e = 0; e < numEchos; e++) {
@@ -124,13 +159,17 @@ function parseCompact(buffer) {
             : 0;
           const d = raw * scaling / 1000; // mm → m
           const θ = θ0 + j * ((θend - θ0) / (numBeams - 1) || 0);
-          points.push({ x: d*Math.cos(φ)*Math.cos(θ),
-                        y: d*Math.cos(φ)*Math.sin(θ),
-                        z: d*Math.sin(φ),
-                        layer: i,
-                        channel: e });
+          layerPoints.push({ x: d*Math.cos(φ)*Math.cos(θ),
+                            y: d*Math.cos(φ)*Math.sin(θ),
+                            z: d*Math.sin(φ),
+                            layer: i,
+                            channel: e });
         }
       }
+      
+      // 각 레이어별로 스무딩 적용
+      const smoothedLayerPoints = smoothPoints(layerPoints);
+      points.push(...smoothedLayerPoints);
     }
 
     // 다음 모듈로
