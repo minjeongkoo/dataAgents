@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>LiDAR Full-Scan Viewer</title>
+  <title>LiDAR Viewer with Layer Colors & Free View</title>
   <style>
     body { margin:0; overflow:hidden; background:#000; }
     canvas { display:block; }
@@ -11,64 +11,91 @@
 <body>
   <script type="module">
     import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+    import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/controls/OrbitControls.js';
 
-    // --- 1) Three.js 기본 세팅 ---
+    // --- 1) Scene/Camera/Renderer ---
     const scene    = new THREE.Scene();
-    const camera   = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 100);
+    const camera   = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 100);
     camera.position.set(0, 0, 5);
-    const renderer = new THREE.WebGLRenderer({ antialias:true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // --- 2) 점군 버퍼 준비 ---
-    const MAX_POINTS = 1000000;               // 충분히 크게 잡아두세요
+    // OrbitControls 로 자유 시점 지원
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    // --- 2) PointCloud 준비 (position + color) ---
+    const MAX_POINTS = 1000000;
     const positions  = new Float32Array(MAX_POINTS * 3);
+    const colors     = new Float32Array(MAX_POINTS * 3);
     const geometry   = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    const material   = new THREE.PointsMaterial({ size:0.02 });
+    geometry.setAttribute('color',    new THREE.BufferAttribute(colors,    3));
+    const material = new THREE.PointsMaterial({
+      size: 0.02,
+      vertexColors: true
+    });
     const pointCloud = new THREE.Points(geometry, material);
     scene.add(pointCloud);
 
-    // --- 3) 세그먼트 누적용 버퍼 ---
-    const SEGMENTS_PER_FRAME = 6;             // 한 바퀴를 채우는 모듈(세그먼트) 수에 맞춰 조정
-    let segmentCount       = 0;
-    let framePoints        = [];
+    // 임시 컬러 객체
+    const colorTmp = new THREE.Color();
 
-    // --- 4) WebSocket 연결 ---
+    // --- 3) 세그먼트 누적 버퍼 설정 (360° 완주용) ---
+    const SEGMENTS_PER_FRAME = 6; // 센서 한 회전당 전송 모듈 수
+    let segmentCount  = 0;
+    let framePoints   = [];
+
+    // --- 4) WebSocket 연결 & 메시지 핸들링 ---
     const ws = new WebSocket(`ws://${location.host}`);
     ws.onopen    = () => console.log('WS opened');
     ws.onerror   = e => console.error('WS error', e);
     ws.onmessage = ({ data }) => {
-      const pts = JSON.parse(data);           // 서버에서 x,y,z 리스트를 받음
+      const pts = JSON.parse(data);
       framePoints.push(...pts);
       segmentCount++;
-
-      // 원하는 개수만큼 세그먼트가 모이면 전체 프레임으로 렌더
       if (segmentCount >= SEGMENTS_PER_FRAME) {
         updatePointCloud(framePoints);
-        // 다음 프레임을 위해 초기화
-        framePoints   = [];
-        segmentCount  = 0;
+        // 다음 회전을 위해 초기화
+        framePoints  = [];
+        segmentCount = 0;
       }
     };
 
-    // --- 5) 포인트클라우드 업데이터 ---
+    // --- 5) PointCloud 업데이트 함수 ---
     function updatePointCloud(arr) {
+      // 레이어 개수 동적으로 계산
+      const maxLayer = arr.reduce((m,p) => p.layer > m ? p.layer : m, 0);
+      const layerCount = maxLayer + 1;
+
       const len = Math.min(arr.length, MAX_POINTS);
       for (let i = 0; i < len; i++) {
-        positions[i*3]   = arr[i].x;
-        positions[i*3+1] = arr[i].y;
-        positions[i*3+2] = arr[i].z;
+        const p = arr[i];
+        // 위치
+        positions[i*3]   = p.x;
+        positions[i*3+1] = p.y;
+        positions[i*3+2] = p.z;
+        // 레이어별 색상 (HSL → RGB)
+        const h = p.layer / (layerCount - 1);
+        colorTmp.setHSL(h, 1.0, 0.5);
+        colors[i*3]   = colorTmp.r;
+        colors[i*3+1] = colorTmp.g;
+        colors[i*3+2] = colorTmp.b;
       }
+
       geometry.setDrawRange(0, len);
       geometry.attributes.position.needsUpdate = true;
+      geometry.attributes.color.needsUpdate    = true;
     }
 
     // --- 6) 렌더 루프 & 리사이즈 처리 ---
     (function animate() {
       requestAnimationFrame(animate);
+      controls.update();
       renderer.render(scene, camera);
     })();
+
     window.addEventListener('resize', () => {
       camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
