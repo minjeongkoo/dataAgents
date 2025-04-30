@@ -46,6 +46,7 @@
     scene.add(pointCloud);
 
     const colorTmp = new THREE.Color();
+    let currentPointCount = 0;
 
     // 4) 360° 완주용 세그먼트 누적
     const SEGMENTS_PER_FRAME = 6;
@@ -72,6 +73,7 @@
       const maxLayer = arr.reduce((m,p) => p.layer > m ? p.layer : m, 0);
       const layerCount = maxLayer + 1;
       const len = Math.min(arr.length, MAX_POINTS);
+      currentPointCount = len;
 
       for (let i = 0; i < len; i++) {
         const p = arr[i];
@@ -85,6 +87,12 @@
         colors[i*3]   = colorTmp.r;
         colors[i*3+1] = colorTmp.g;
         colors[i*3+2] = colorTmp.b;
+      }
+
+      // 사용되지 않는 버퍼 공간을 0으로 채우기
+      for (let i = len; i < MAX_POINTS; i++) {
+        positions[i*3] = positions[i*3+1] = positions[i*3+2] = 0;
+        colors[i*3] = colors[i*3+1] = colors[i*3+2] = 0;
       }
 
       geometry.setDrawRange(0, len);
