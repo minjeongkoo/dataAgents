@@ -11,8 +11,14 @@ const __dirname  = path.dirname(__filename);
 
 // 서버 설정
 const UDP_PORT  = 2115;  // LiDAR 데이터 수신용 UDP 포트
-const HTTP_PORT = '5100';  // 웹 서버용 HTTP 포트
-const HTTP_HOST = '0.0.0.0';  // 모든 네트워크 인터페이스
+const HTTP_HOST = '0.0.0.0';
+const HTTP_PORT = '3000';
+
+const httpServer = app.listen(HTTP_PORT, HTTP_HOST, () =>
+  console.log(`HTTP ▶ http://localhost:${HTTP_PORT}`);
+  console.log(`LAN   ▶ http://172.31.99.125:${HTTP_PORT}`);
+);
+
 
 // 1) HTTP Server: public 폴더 서빙
 const app = express();
@@ -25,10 +31,6 @@ const wss = new WebSocketServer({ server: httpServer });
 wss.on('connection', ws => {
   console.log('🌐 WS 클라이언트 연결됨');
 });
-
-const httpServer = app.listen(HTTP_PORT, HTTP_HOST, () =>
-  console.log(`HTTP ▶ http://0.0.0.0:${HTTP_PORT}`)
-);
 
 // 3) UDP 수신 → Compact 파싱 → 스캔별 누적 → WS 브로드캐스트
 const udp = dgram.createSocket('udp4');

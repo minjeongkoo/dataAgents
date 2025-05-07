@@ -95,7 +95,7 @@
     let framePoints   = [];
 
     // 5) WebSocket 연결
-    const ws = new WebSocket(`ws://${location.host}`);
+    const ws = new WebSocket(`ws://${location.hostname}:3000`);
     ws.onopen    = () => {
       console.log('WS opened');
       addLog('WebSocket Connected');
