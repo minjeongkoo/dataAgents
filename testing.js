@@ -11,8 +11,7 @@ const __dirname  = path.dirname(__filename);
 
 // 서버 설정
 const UDP_PORT  = 2115;  // LiDAR 데이터 수신용 UDP 포트
-const HTTP_PORT = '5100';  // 웹 서버용 HTTP 포트
-const HTTP_HOST = '0.0.0.0';  // 모든 네트워크 인터페이스
+const HTTP_PORT = 3000;  // 웹 서버용 HTTP 포트
 
 // 1) HTTP Server: public 폴더 서빙
 const app = express();
@@ -21,55 +20,60 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// 2) HTTP + WebSocket 서버 시작
+const httpServer = app.listen(HTTP_PORT, () =>
+  console.log(`HTTP ▶ http://localhost:${HTTP_PORT}`)
+);
 const wss = new WebSocketServer({ server: httpServer });
 wss.on('connection', ws => {
   console.log('🌐 WS 클라이언트 연결됨');
 });
 
-const httpServer = app.listen(HTTP_PORT, HTTP_HOST, () =>
-  console.log(`HTTP ▶ http://0.0.0.0:${HTTP_PORT}`)
-);
+// 스캔 데이터 버퍼
+const scanBuffer = new Map(); // telegramCounter -> { points: [], moduleCount: number, expectedModules: number }
 
-// 3) UDP 수신 → Compact 파싱 → 스캔별 누적 → WS 브로드캐스트
+// 3) UDP 수신 → Compact 파싱 → WS 브로드캐스트
 const udp = dgram.createSocket('udp4');
 udp.bind(UDP_PORT, () =>
   console.log(`📡 UDP 포트 ${UDP_PORT} 번에서 수신 대기 중`)
 );
 
-// 현재 스캔 버퍼
-let currentCounter = null;
-let currentPoints  = [];
-
 udp.on('message', buffer => {
   const result = parseCompact(buffer);
-  if (!result) return;
+  if (!result || !result.points || !result.points.length) return;
 
-  const { telegramCounter, pts } = result;
-
-  // 첫 모듈일 때 초기화
-  if (currentCounter === null) {
-    currentCounter = telegramCounter;
-    currentPoints  = [];
+  const { points, telegramCounter, moduleIndex, totalModules } = result;
+  
+  // 스캔 버퍼에 데이터 추가
+  if (!scanBuffer.has(telegramCounter)) {
+    scanBuffer.set(telegramCounter, {
+      points: [],
+      moduleCount: 0,
+      expectedModules: totalModules
+    });
   }
 
-  // telegramCounter가 바뀌면, 이전 스캔 완성 → 브로드캐스트
-  if (telegramCounter !== currentCounter) {
-    const msg = JSON.stringify(currentPoints);
-    for (const client of wss.clients) {
-      if (client.readyState === 1) {
-        client.send(msg);
-      }
+  const scan = scanBuffer.get(telegramCounter);
+  scan.points.push(...points);
+  scan.moduleCount++;
+
+  // 모든 모듈이 수신되었는지 확인
+  if (scan.moduleCount === scan.expectedModules) {
+    // 전체 스캔 데이터 브로드캐스트
+    const msg = JSON.stringify(scan.points);
+    for (const c of wss.clients) {
+      if (c.readyState === 1) c.send(msg);
     }
-    // 새로운 스캔 시작
-    currentCounter = telegramCounter;
-    currentPoints  = [];
+    // 스캔 버퍼에서 제거
+    scanBuffer.delete(telegramCounter);
   }
-
-  // 같은 스캔이라면 포인트 누적
-  currentPoints.push(...pts);
 });
 
-// parseCompact: buffer → { telegramCounter, pts } or null
+/**
+ * LiDAR Compact Format 파서
+ * - 프레임 헤더: 32바이트 (SOF, commandId, telegramCounter, timestamp, moduleSize)
+ * - 모듈별로 순차 처리: "빔 우선(beam-major)" 순서
+ */
 function parseCompact(buffer) {
   if (buffer.length < 32) return null;
 
@@ -78,8 +82,10 @@ function parseCompact(buffer) {
   // 2) commandId 검증
   if (buffer.readUInt32LE(4) !== 1) return null;
 
-  // telegramCounter (8바이트 LE)
-  const telegramCounter = Number(buffer.readBigUInt64LE(8));
+  // telegramCounter와 moduleIndex 파싱
+  const telegramCounter = buffer.readUInt32LE(8);
+  const moduleIndex = buffer.readUInt32LE(12);
+  const totalModules = buffer.readUInt32LE(16);
 
   let offset     = 32;
   let moduleSize = buffer.readUInt32LE(28);
@@ -137,7 +143,7 @@ function parseCompact(buffer) {
 
     const dataOffset = mo;
 
-    // ─── 측정 데이터 파싱: “빔 우선 → 레이어” 순서 ───
+    // ─── 측정 데이터 파싱: 빔 우선 → 레이어 ───
     for (let beamIdx = 0; beamIdx < numBeams; beamIdx++) {
       for (let layerIdx = 0; layerIdx < numLayers; layerIdx++) {
         const base = dataOffset + (beamIdx * numLayers + layerIdx) * beamSize;
@@ -151,13 +157,17 @@ function parseCompact(buffer) {
           const θ = thetaStart[layerIdx]
                     + beamIdx * ((thetaStop[layerIdx] - thetaStart[layerIdx]) / (numBeams - 1));
 
-          points.push({ x: d * Math.cos(φ) * Math.cos(θ),
-                        y: d * Math.cos(φ) * Math.sin(θ),
-                        z: d * Math.sin(φ),
-                        layer: layerIdx,
-                        channel: echoIdx,
-                        beamIdx,
-                        theta: θ });
+          points.push({
+            x: d * Math.cos(φ) * Math.cos(θ),
+            y: d * Math.cos(φ) * Math.sin(θ),
+            z: d * Math.sin(φ),
+            layer: layerIdx,
+            channel: echoIdx,
+            beamIdx,
+            theta: θ,
+            moduleIndex,
+            telegramCounter
+          });
         }
       }
     }
@@ -167,5 +177,5 @@ function parseCompact(buffer) {
     offset    += m.length;
   }
 
-  return { telegramCounter, pts: points };
+  return { points, telegramCounter, moduleIndex, totalModules };
 }
