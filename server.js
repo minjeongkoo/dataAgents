@@ -29,31 +29,56 @@ wss.on('connection', ws => {
   console.log('🌐 WS 클라이언트 연결됨');
 });
 
-// 3) UDP 수신 → Compact 파싱 → WS 브로드캐스트
+// 3) UDP 수신 → Compact 파싱 → 스캔별 누적 → WS 브로드캐스트
 const udp = dgram.createSocket('udp4');
 udp.bind(UDP_PORT, () =>
   console.log(`📡 UDP 포트 ${UDP_PORT} 번에서 수신 대기 중`)
 );
+
+// 현재 스캔 버퍼
+let currentCounter = null;
+let currentPoints  = [];
+
 udp.on('message', buffer => {
-  const pts = parseCompact(buffer);
-  if (!pts || !pts.length) return;
-  const msg = JSON.stringify(pts);
-  for (const c of wss.clients) {
-    if (c.readyState === 1) c.send(msg);
+  const result = parseCompact(buffer);
+  if (!result) return;
+
+  const { telegramCounter, pts } = result;
+
+  // 첫 모듈일 때 초기화
+  if (currentCounter === null) {
+    currentCounter = telegramCounter;
+    currentPoints  = [];
   }
+
+  // telegramCounter가 바뀌면, 이전 스캔 완성 → 브로드캐스트
+  if (telegramCounter !== currentCounter) {
+    const msg = JSON.stringify(currentPoints);
+    for (const client of wss.clients) {
+      if (client.readyState === 1) {
+        client.send(msg);
+      }
+    }
+    // 새로운 스캔 시작
+    currentCounter = telegramCounter;
+    currentPoints  = [];
+  }
+
+  // 같은 스캔이라면 포인트 누적
+  currentPoints.push(...pts);
 });
 
-/**
- * LiDAR Compact Format 파서
- * - 프레임 헤더: 32바이트 (SOF, commandId, telegramCounter, timestamp, moduleSize)
- * - 모듈별로 순차 처리: “빔 우선(beam-major)” 순서
- */
+// parseCompact: buffer → { telegramCounter, pts } or null
 function parseCompact(buffer) {
   if (buffer.length < 32) return null;
-  // SOF 검증
+
+  // 1) SOF 검증
   if (buffer.readUInt32BE(0) !== 0x02020202) return null;
-  // commandId 검증
+  // 2) commandId 검증
   if (buffer.readUInt32LE(4) !== 1) return null;
+
+  // telegramCounter (8바이트 LE)
+  const telegramCounter = Number(buffer.readBigUInt64LE(8));
 
   let offset     = 32;
   let moduleSize = buffer.readUInt32LE(28);
@@ -68,22 +93,22 @@ function parseCompact(buffer) {
     const numEchos  = m.readUInt32LE(28);  // NumberOfEchosPerBeam
     let mo = 32;
 
-    // TimeStampStart/Stop 스킵
+    // TimeStampStart/Stop 스킵 (16바이트 × numLayers)
     mo += numLayers * 16;
 
-    // Phi 배열 (수직 각도)
+    // Phi 배열
     const phiArray = Array.from({ length: numLayers }, (_, i) =>
       m.readFloatLE(mo + 4 * i)
     );
     mo += 4 * numLayers;
 
-    // ThetaStart 배열 (시작 수평 각도)
+    // ThetaStart 배열
     const thetaStart = Array.from({ length: numLayers }, (_, i) =>
       m.readFloatLE(mo + 4 * i)
     );
     mo += 4 * numLayers;
 
-    // ThetaStop 배열 (종료 수평 각도)
+    // ThetaStop 배열
     const thetaStop = Array.from({ length: numLayers }, (_, i) =>
       m.readFloatLE(mo + 4 * i)
     );
@@ -93,11 +118,11 @@ function parseCompact(buffer) {
     const scaling = m.readFloatLE(mo);
     mo += 4;
 
-    // 다음 모듈 크기 파싱
+    // nextModuleSize 파싱
     const nextModuleSize = m.readUInt32LE(mo);
     mo += 4;
 
-    // reserved(1) → DataContentEchos(1) → DataContentBeams(1) → reserved(1)
+    // reserved → DataContentEchos → DataContentBeams → reserved
     mo += 1;
     const dataContentEchos = m.readUInt8(mo++);
     const dataContentBeams = m.readUInt8(mo++);
@@ -111,9 +136,7 @@ function parseCompact(buffer) {
 
     const dataOffset = mo;
 
-    // ─── 측정 데이터 파싱: 빔 우선 → 레이어 ───
-    // 직렬화 순서: 모든 레이어를 하나씩 순회하는 것이 아니라
-    // “빔 인덱스 0의 모든 레이어 → 빔 인덱스 1의 모든 레이어 → …”
+    // ─── 측정 데이터 파싱: “빔 우선 → 레이어” 순서 ───
     for (let beamIdx = 0; beamIdx < numBeams; beamIdx++) {
       for (let layerIdx = 0; layerIdx < numLayers; layerIdx++) {
         const base = dataOffset + (beamIdx * numLayers + layerIdx) * beamSize;
@@ -127,24 +150,21 @@ function parseCompact(buffer) {
           const θ = thetaStart[layerIdx]
                     + beamIdx * ((thetaStop[layerIdx] - thetaStart[layerIdx]) / (numBeams - 1));
 
-          points.push({
-            x: d * Math.cos(φ) * Math.cos(θ),
-            y: d * Math.cos(φ) * Math.sin(θ),
-            z: d * Math.sin(φ),
-            layer: layerIdx,
-            channel: echoIdx,
-            beamIdx,
-            theta: θ
-          });
+          points.push({ x: d * Math.cos(φ) * Math.cos(θ),
+                        y: d * Math.cos(φ) * Math.sin(θ),
+                        z: d * Math.sin(φ),
+                        layer: layerIdx,
+                        channel: echoIdx,
+                        beamIdx,
+                        theta: θ });
         }
       }
     }
 
     // 다음 모듈로 이동
-    const moduleLen = m.length;
     moduleSize = nextModuleSize;
-    offset    += moduleLen;
+    offset    += m.length;
   }
 
-  return points;
+  return { telegramCounter, pts: points };
 }
