@@ -6,21 +6,25 @@ import dgram from 'dgram';
 import { WebSocketServer } from 'ws';
 
 // ES 모듈에서 __dirname 복원
+// Restore __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
-// 설정
-const UDP_PORT  = 2115;
-const HTTP_PORT = 3000;
+// 서버 설정
+// Server Configuration
+const UDP_PORT  = 2115;  // 라이다 데이터 수신용 UDP 포트 / UDP port for LiDAR data reception
+const HTTP_PORT = 3000;  // 웹 서버용 HTTP 포트 / HTTP port for web server
 
 // 1) HTTP 서버: public 폴더 서빙
+// 1) HTTP Server: Serving public folder
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// 2) HTTP + WebSocket
+// 2) HTTP + WebSocket 서버 설정
+// 2) HTTP + WebSocket Server Configuration
 const httpServer = app.listen(HTTP_PORT, () =>
   console.log(`HTTP ▶ http://localhost:${HTTP_PORT}`)
 );
@@ -30,6 +34,7 @@ wss.on('connection', ws => {
 });
 
 // 3) UDP 수신 → Compact 파싱 → WS 브로드캐스트
+// 3) UDP Reception → Compact Parsing → WS Broadcast
 const udp = dgram.createSocket('udp4');
 udp.bind(UDP_PORT, () =>
   console.log(`📡 UDP listening on port ${UDP_PORT}`)
@@ -43,6 +48,16 @@ udp.on('message', buffer => {
   }
 });
 
+/**
+ * 포인트 클라우드 데이터 스무딩 함수
+ * Point Cloud Data Smoothing Function
+ * 
+ * @param {Array} points - 원본 포인트 클라우드 데이터 / Original point cloud data
+ * @param {number} windowSize - 스무딩 윈도우 크기 (기본값: 3) / Smoothing window size (default: 3)
+ * @returns {Array} 스무딩된 포인트 클라우드 데이터 / Smoothed point cloud data
+ * 
+ */
+
 function smoothPoints(points, windowSize = 3) {
   if (points.length < windowSize) return points;
   
@@ -54,6 +69,7 @@ function smoothPoints(points, windowSize = 3) {
     let count = 0;
     
     // 주변 포인트들의 평균 계산
+    // Calculate average of surrounding points
     for (let j = -halfWindow; j <= halfWindow; j++) {
       const idx = i + j;
       if (idx >= 0 && idx < points.length) {
@@ -77,17 +93,41 @@ function smoothPoints(points, windowSize = 3) {
 }
 
 /**
- * Compact Format Parser
- * - 프레임 헤더(32바이트)에서 SOF, commandId, telegramCounter, timestamp, sizeModule0 파싱
- * - sizeModule0 → nextModuleSize 로 모듈 루프
- * - metadata: numLines, numBeams, numEchos, Phi[], ThetaStart[], ThetaStop[], scalingFactor 등
- * - measurement: 모든 에코(echo) 채널 순회, 거리(raw) * scaling → m 단위, φ/θ 보간 → x,y,z
+ * 라이다 Compact Format 파서
+ * LiDAR Compact Format Parser
+ * 
+ * 데이터 구조 / Data Structure:
+ * 1. 프레임 헤더 (32바이트) / Frame Header (32 bytes)
+ *    - SOF (Start of Frame): 0x02020202
+ *    - commandId: 1
+ *    - telegramCounter
+ *    - timestamp
+ *    - sizeModule0
+ * 
+ * 2. 모듈 데이터 / Module Data
+ *    - 메타데이터 / Metadata:
+ *      * numLines: 레이어 수 / Number of layers
+ *      * numBeams: 빔 수 / Number of beams
+ *      * numEchos: 에코 수 / Number of echoes
+ *      * Phi[]: 각 레이어의 수직 각도 / Vertical angle for each layer
+ *      * ThetaStart[]: 각 레이어의 시작 수평 각도 / Starting horizontal angle for each layer
+ *      * ThetaStop[]: 각 레이어의 종료 수평 각도 / Ending horizontal angle for each layer
+ *      * scalingFactor: 거리 스케일링 계수 / Distance scaling factor
+ * 
+ *    - 측정 데이터 / Measurement Data:
+ *      * 각 에코 채널별 거리 데이터 / Distance data for each echo channel
+ *      * 거리(raw) * scaling → 미터 단위로 변환 / Convert raw distance * scaling to meters
+ *      * φ/θ 보간을 통한 x,y,z 좌표 계산 / Calculate x,y,z coordinates through φ/θ interpolation
+ * 
+ * @param {Buffer} buffer - 수신된 UDP 데이터 버퍼 / Received UDP data buffer
+ * @returns {Array|null} 파싱된 포인트 클라우드 데이터 또는 null / Parsed point cloud data or null
+ * 
  */
 function parseCompact(buffer) {
   if (buffer.length < 32) return null;
-  // 1) SOF
+  // 1) SOF 검증 / SOF validation
   if (buffer.readUInt32BE(0) !== 0x02020202) return null;
-  // 2) commandId
+  // 2) commandId 검증 / commandId validation
   if (buffer.readUInt32LE(4) !== 1) return null;
 
   let moduleSize = buffer.readUInt32LE(28);
@@ -97,67 +137,77 @@ function parseCompact(buffer) {
   while (moduleSize > 0 && offset + moduleSize <= buffer.length) {
     const m = buffer.slice(offset, offset + moduleSize);
 
-    // --- metadata ---
-    const numLayers = m.readUInt32LE(20);
-    const numBeams = m.readUInt32LE(24);
-    const numEchos = m.readUInt32LE(28);
+    // --- 메타데이터 파싱 / Metadata parsing ---
+    const numLayers = m.readUInt32LE(20);  // 레이어 수 / Number of layers
+    const numBeams = m.readUInt32LE(24);   // 빔 수 / Number of beams
+    const numEchos = m.readUInt32LE(28);   // 에코 수 / Number of echoes
     let mo = 32;
 
-    // skip TimeStampStart/Stop (16 bytes * numLayers)
+    // TimeStampStart/Stop 건너뛰기 (16바이트 * numLayers)
+    // Skip TimeStampStart/Stop (16 bytes * numLayers)
     mo += numLayers * 16;
 
-    // Phi
+    // Phi (수직 각도) 배열 파싱 / Parse Phi (vertical angle) array
     const phiArray = Array.from({ length: numLayers }, (_, i) =>
       m.readFloatLE(mo + 4 * i)
     );
     mo += 4 * numLayers;
 
-    // ThetaStart
+    // ThetaStart (시작 수평 각도) 배열 파싱 / Parse ThetaStart (starting horizontal angle) array
     const thetaStart = Array.from({ length: numLayers }, (_, i) =>
       m.readFloatLE(mo + 4 * i)
     );
     mo += 4 * numLayers;
 
-    // ThetaStop
+    // ThetaStop (종료 수평 각도) 배열 파싱 / Parse ThetaStop (ending horizontal angle) array
     const thetaStop = Array.from({ length: numLayers }, (_, i) =>
       m.readFloatLE(mo + 4 * i)
     );
     mo += 4 * numLayers;
 
-    // scaling factor
+    // 스케일링 계수 파싱 / Parse scaling factor
     const scaling = m.readFloatLE(mo);
     mo += 4;
 
-    // 다음 모듈 크기
+    // 다음 모듈 크기 파싱 / Parse next module size
     const nextModuleSize = m.readUInt32LE(mo);
     mo += 4;
 
-    // reserved + dataContentEchos + dataContentBeams + reserved
+    // 데이터 컨텐츠 설정 파싱 / Parse data content settings
     mo += 1;
     const dataContentEchos = m.readUInt8(mo++);
     const dataContentBeams = m.readUInt8(mo++);
     mo += 1;
 
-    // echoSize, beamPropSize, beamAngleSize 계산
+    // 데이터 크기 계산 / Calculate data sizes
     const echoSize      = ((dataContentEchos & 1) ? 2 : 0) + ((dataContentEchos & 2) ? 2 : 0);
     const beamPropSize  = (dataContentBeams & 1) ? 1 : 0;
     const beamAngleSize = (dataContentBeams & 2) ? 2 : 0;
     const beamSize      = echoSize * numEchos + beamPropSize + beamAngleSize;
 
-    // --- 점 읽기 (beam × layer × echo) ---
+    // --- 포인트 클라우드 데이터 파싱 (beam × layer × echo) ---
+    // --- Point cloud data parsing (beam × layer × echo) ---
     for (let beamIdx = 0; beamIdx < numBeams; beamIdx++) {
       for (let layerIdx = 0; layerIdx < numLayers; layerIdx++) {
-        const base = mo + (layerIdx * numBeams + beamIdx) * beamSize;
+        // 레이어와 빔 인덱스를 고려한 올바른 오프셋 계산
+        // Calculate correct offset considering layer and beam indices
+        const base = mo + (layerIdx * numBeams * beamSize) + (beamIdx * beamSize);
         
         for (let echoIdx = 0; echoIdx < numEchos; echoIdx++) {
+          // 거리 데이터 읽기 / Read distance data
           const raw = echoSize > 0
             ? m.readUInt16LE(base + echoIdx * echoSize)
             : 0;
           
+          // 거리를 미터 단위로 변환 / Convert distance to meters
           const d = raw * scaling / 1000; // mm → m
+          
+          // 각도 계산 / Calculate angles
           const φ = phiArray[layerIdx];
           const θ = thetaStart[layerIdx] + beamIdx * ((thetaStop[layerIdx] - thetaStart[layerIdx]) / (numBeams - 1) || 0);
           
+          // 3D 좌표 계산 (구면 좌표계 → 직교 좌표계)
+          // Calculate 3D coordinates (spherical → cartesian)
           points.push({
             x: d * Math.cos(φ) * Math.cos(θ),
             y: d * Math.cos(φ) * Math.sin(θ),
@@ -169,7 +219,7 @@ function parseCompact(buffer) {
       }
     }
 
-    // 다음 모듈로
+    // 다음 모듈로 이동 / Move to next module
     moduleSize = nextModuleSize;
     offset    += m.length;
   }
