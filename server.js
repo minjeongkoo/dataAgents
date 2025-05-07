@@ -7,16 +7,15 @@ import { WebSocketServer } from 'ws';
 
 // ES 모듈에서 __dirname 복원
 const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
+const __dirname = path.dirname(__filename);
 
 // 서버 설정
-const UDP_PORT  = 2115;  // LiDAR 데이터 수신용 UDP 포트
+const UDP_PORT = 2115;  // LiDAR 데이터 수신용 UDP 포트
 const HTTP_HOST = '0.0.0.0';
 const HTTP_PORT = '3000';
 
 const httpServer = app.listen(HTTP_PORT, HTTP_HOST, () =>
-  console.log(`HTTP ▶ http://localhost:${HTTP_PORT}`);
-  console.log(`LAN   ▶ http://172.31.99.125:${HTTP_PORT}`);
+  console.log('http server started')
 );
 
 
@@ -40,7 +39,7 @@ udp.bind(UDP_PORT, () =>
 
 // 현재 스캔 버퍼
 let currentCounter = null;
-let currentPoints  = [];
+let currentPoints = [];
 
 udp.on('message', buffer => {
   const result = parseCompact(buffer);
@@ -51,7 +50,7 @@ udp.on('message', buffer => {
   // 첫 모듈일 때 초기화
   if (currentCounter === null) {
     currentCounter = telegramCounter;
-    currentPoints  = [];
+    currentPoints = [];
   }
 
   // telegramCounter가 바뀌면, 이전 스캔 완성 → 브로드캐스트
@@ -64,7 +63,7 @@ udp.on('message', buffer => {
     }
     // 새로운 스캔 시작
     currentCounter = telegramCounter;
-    currentPoints  = [];
+    currentPoints = [];
   }
 
   // 같은 스캔이라면 포인트 누적
@@ -83,17 +82,17 @@ function parseCompact(buffer) {
   // telegramCounter (8바이트 LE)
   const telegramCounter = Number(buffer.readBigUInt64LE(8));
 
-  let offset     = 32;
+  let offset = 32;
   let moduleSize = buffer.readUInt32LE(28);
-  const points   = [];
+  const points = [];
 
   while (moduleSize > 0 && offset + moduleSize <= buffer.length) {
     const m = buffer.slice(offset, offset + moduleSize);
 
     // ─── 메타데이터 파싱 ───
     const numLayers = m.readUInt32LE(20);  // NumberOfLinesInModule
-    const numBeams  = m.readUInt32LE(24);  // NumberOfBeamsPerScan
-    const numEchos  = m.readUInt32LE(28);  // NumberOfEchosPerBeam
+    const numBeams = m.readUInt32LE(24);  // NumberOfBeamsPerScan
+    const numEchos = m.readUInt32LE(28);  // NumberOfEchosPerBeam
     let mo = 32;
 
     // TimeStampStart/Stop 스킵 (16바이트 × numLayers)
@@ -132,14 +131,14 @@ function parseCompact(buffer) {
     mo += 1;
 
     // echo/beam 크기 계산
-    const echoSize      = ((dataContentEchos & 1) ? 2 : 0) + ((dataContentEchos & 2) ? 2 : 0);
-    const beamPropSize  = (dataContentBeams & 1) ? 1 : 0;
+    const echoSize = ((dataContentEchos & 1) ? 2 : 0) + ((dataContentEchos & 2) ? 2 : 0);
+    const beamPropSize = (dataContentBeams & 1) ? 1 : 0;
     const beamAngleSize = (dataContentBeams & 2) ? 2 : 0;
-    const beamSize      = echoSize * numEchos + beamPropSize + beamAngleSize;
+    const beamSize = echoSize * numEchos + beamPropSize + beamAngleSize;
 
     const dataOffset = mo;
 
-    // ─── 측정 데이터 파싱: “빔 우선 → 레이어” 순서 ───
+    // ─── 측정 데이터 파싱: "빔 우선 → 레이어" 순서 ───
     for (let beamIdx = 0; beamIdx < numBeams; beamIdx++) {
       for (let layerIdx = 0; layerIdx < numLayers; layerIdx++) {
         const base = dataOffset + (beamIdx * numLayers + layerIdx) * beamSize;
@@ -151,22 +150,24 @@ function parseCompact(buffer) {
 
           const φ = phiArray[layerIdx];
           const θ = thetaStart[layerIdx]
-                    + beamIdx * ((thetaStop[layerIdx] - thetaStart[layerIdx]) / (numBeams - 1));
+            + beamIdx * ((thetaStop[layerIdx] - thetaStart[layerIdx]) / (numBeams - 1));
 
-          points.push({ x: d * Math.cos(φ) * Math.cos(θ),
-                        y: d * Math.cos(φ) * Math.sin(θ),
-                        z: d * Math.sin(φ),
-                        layer: layerIdx,
-                        channel: echoIdx,
-                        beamIdx,
-                        theta: θ });
+          points.push({
+            x: d * Math.cos(φ) * Math.cos(θ),
+            y: d * Math.cos(φ) * Math.sin(θ),
+            z: d * Math.sin(φ),
+            layer: layerIdx,
+            channel: echoIdx,
+            beamIdx,
+            theta: θ
+          });
         }
       }
     }
 
     // 다음 모듈로 이동
     moduleSize = nextModuleSize;
-    offset    += m.length;
+    offset += m.length;
   }
 
   return { telegramCounter, pts: points };
