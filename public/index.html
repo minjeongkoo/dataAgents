@@ -2,74 +2,52 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>LiDAR Point Cloud Viewer</title>
-  <style>
-    body { margin: 0; overflow: hidden; }
-    canvas { display: block; }
-  </style>
+  <title>LiDAR Viewer</title>
+  <style>body{margin:0;overflow:hidden;}canvas{display:block;}</style>
 </head>
 <body>
-  <script type="module">
-    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+<script type="module">
+  import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+  const scene    = new THREE.Scene();
+  const camera   = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
+  camera.position.set(0,0,5);
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(innerWidth, innerHeight);
+  document.body.appendChild(renderer.domElement);
 
-    // 씬/카메라/렌더러 기본 세팅
-    const scene    = new THREE.Scene();
-    const camera   = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 0, 5);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
-
-    // 포인트 클라우드 메쉬 초기화
-    let pointsMesh = null;
-
-    // WebSocket 연결 (host: 실제 서버 IP 또는 도메인)
-    const socket = new WebSocket(`ws://${location.host}`);
-    socket.binaryType = 'arraybuffer';
-
-    socket.addEventListener('open', () => {
-      console.log('WebSocket 연결 성공');
+  let pointsMesh;
+  const socket = new WebSocket(`ws://${location.host}`);
+  socket.addEventListener('message', ({data})=>{
+    const pts = JSON.parse(data);
+    const pos = new Float32Array(pts.length*3);
+    pts.forEach((p,i)=>{
+      pos[3*i]=p.x; pos[3*i+1]=p.y; pos[3*i+2]=p.z;
     });
 
-    socket.addEventListener('message', ({ data }) => {
-      // JSON 배열: [{x,y,z,layer,channel,beamIdx,theta}, …]
-      const pts = JSON.parse(data);
-      const positions = new Float32Array(pts.length * 3);
-      pts.forEach((p, i) => {
-        positions[3*i  ] = p.x;
-        positions[3*i+1] = p.y;
-        positions[3*i+2] = p.z;
-      });
-
-      // 이전 포인트 제거
-      if (pointsMesh) {
-        scene.remove(pointsMesh);
-        pointsMesh.geometry.dispose();
-        pointsMesh.material.dispose();
-      }
-
-      // 새로운 BufferGeometry + PointsMaterial
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      const mat = new THREE.PointsMaterial({ size: 0.03 });
-      pointsMesh = new THREE.Points(geom, mat);
-      scene.add(pointsMesh);
-    });
-
-    // 윈도우 리사이즈 처리
-    window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth/window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-
-    // 애니메이션 루프
-    function animate() {
-      requestAnimationFrame(animate);
-      renderer.render(scene, camera);
+    // 이전 전체 포인트 제거
+    if(pointsMesh){
+      scene.remove(pointsMesh);
+      pointsMesh.geometry.dispose();
+      pointsMesh.material.dispose();
     }
-    animate();
-  </script>
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat  = new THREE.PointsMaterial({ size: 0.03 });
+    pointsMesh = new THREE.Points(geom, mat);
+    scene.add(pointsMesh);
+  });
+
+  window.addEventListener('resize', ()=>{
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  (function animate(){
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+  })();
+</script>
 </body>
 </html>
