@@ -98,11 +98,11 @@
     const ws = new WebSocket(`ws://${location.host}`);
     ws.onopen    = () => {
       console.log('WS opened');
-      addLog('WebSocket 연결됨');
+      addLog('WebSocket Connected');
     };
     ws.onerror   = e => {
       console.error('WS error', e);
-      addLog('WebSocket 오류 발생');
+      addLog('WebSocket Error');
     };
 
     // 7) 렌더 루프 & 리사이즈
@@ -152,14 +152,19 @@
       segmentCount++;
       
       // 데이터 로그 추가
-      addLog(`수신된 포인트: ${pts.length}개, 세그먼트: ${segmentCount}/${SEGMENTS_PER_FRAME}`);
+      const avgX = pts.reduce((sum, p) => sum + p.x, 0) / pts.length;
+      const avgY = pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
+      const avgZ = pts.reduce((sum, p) => sum + p.z, 0) / pts.length;
+      
+      addLog(`Points: ${pts.length}, Segment: ${segmentCount}/${SEGMENTS_PER_FRAME}`);
+      addLog(`Avg Position: X:${avgX.toFixed(2)} Y:${avgY.toFixed(2)} Z:${avgZ.toFixed(2)}`);
       
       if (segmentCount >= SEGMENTS_PER_FRAME) {
         updatePointCloud(framePoints);
         framePoints = [];
         segmentCount = 0;
         startRendering();
-        addLog(`포인트 클라우드 업데이트: ${currentPointCount}개 포인트`);
+        addLog(`Point Cloud Updated: ${currentPointCount} points`);
       }
     };
 
@@ -170,11 +175,24 @@
       const len = Math.min(arr.length, MAX_POINTS);
       currentPointCount = len;
 
+      // Calculate bounds
+      let minX = Infinity, maxX = -Infinity;
+      let minY = Infinity, maxY = -Infinity;
+      let minZ = Infinity, maxZ = -Infinity;
+
       for (let i = 0; i < len; i++) {
         const p = arr[i];
         positions[i*3]   = p.x;
         positions[i*3+1] = p.y;
         positions[i*3+2] = p.z;
+
+        // Update bounds
+        minX = Math.min(minX, p.x);
+        maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y);
+        maxY = Math.max(maxY, p.y);
+        minZ = Math.min(minZ, p.z);
+        maxZ = Math.max(maxZ, p.z);
 
         // 레이어별 HSL → RGB 매핑
         const h = layerCount>1 ? p.layer / (layerCount - 1) : 0;
@@ -183,6 +201,9 @@
         colors[i*3+1] = colorTmp.g;
         colors[i*3+2] = colorTmp.b;
       }
+
+      // Log bounds information
+      addLog(`Bounds: X[${minX.toFixed(2)}, ${maxX.toFixed(2)}] Y[${minY.toFixed(2)}, ${maxY.toFixed(2)}] Z[${minZ.toFixed(2)}, ${maxZ.toFixed(2)}]`);
 
       // 사용되지 않는 버퍼 공간을 0으로 채우기
       for (let i = len; i < MAX_POINTS; i++) {
