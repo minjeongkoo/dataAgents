@@ -185,13 +185,26 @@ function parseCompact(buffer) {
     const beamAngleSize = (dataContentBeams & 2) ? 2 : 0;
     const beamSize      = echoSize * numEchos + beamPropSize + beamAngleSize;
 
+    // 각 레이어별 데이터 크기 계산 / Calculate data size for each layer
+    const layerSizes = Array.from({ length: numLayers }, (_, layerIdx) => {
+      const layerBeams = Math.floor((thetaStop[layerIdx] - thetaStart[layerIdx]) / 
+        ((thetaStop[0] - thetaStart[0]) / (numBeams - 1))) + 1;
+      return layerBeams * beamSize;
+    });
+
     // --- 포인트 클라우드 데이터 파싱 (beam × layer × echo) ---
     // --- Point cloud data parsing (beam × layer × echo) ---
-    for (let beamIdx = 0; beamIdx < numBeams; beamIdx++) {
-      for (let layerIdx = 0; layerIdx < numLayers; layerIdx++) {
-        // 레이어와 빔 인덱스를 고려한 올바른 오프셋 계산
-        // Calculate correct offset considering layer and beam indices
-        const base = mo + (layerIdx * numBeams * beamSize) + (beamIdx * beamSize);
+    let currentOffset = mo;
+    for (let layerIdx = 0; layerIdx < numLayers; layerIdx++) {
+      const layerBeams = Math.floor((thetaStop[layerIdx] - thetaStart[layerIdx]) / 
+        ((thetaStop[0] - thetaStart[0]) / (numBeams - 1))) + 1;
+      
+      // 빔 데이터를 임시 배열에 저장
+      // Store beam data in temporary array
+      const layerPoints = [];
+      
+      for (let beamIdx = 0; beamIdx < layerBeams; beamIdx++) {
+        const base = currentOffset + (beamIdx * beamSize);
         
         for (let echoIdx = 0; echoIdx < numEchos; echoIdx++) {
           // 거리 데이터 읽기 / Read distance data
@@ -204,19 +217,31 @@ function parseCompact(buffer) {
           
           // 각도 계산 / Calculate angles
           const φ = phiArray[layerIdx];
-          const θ = thetaStart[layerIdx] + beamIdx * ((thetaStop[layerIdx] - thetaStart[layerIdx]) / (numBeams - 1) || 0);
+          const θ = thetaStart[layerIdx] + beamIdx * ((thetaStop[layerIdx] - thetaStart[layerIdx]) / (layerBeams - 1) || 0);
           
           // 3D 좌표 계산 (구면 좌표계 → 직교 좌표계)
           // Calculate 3D coordinates (spherical → cartesian)
-          points.push({
+          layerPoints.push({
             x: d * Math.cos(φ) * Math.cos(θ),
             y: d * Math.cos(φ) * Math.sin(θ),
             z: d * Math.sin(φ),
             layer: layerIdx,
-            channel: echoIdx
+            channel: echoIdx,
+            beamIdx: beamIdx,  // 빔 인덱스 추가 / Add beam index
+            theta: θ          // 각도 정보 추가 / Add angle information
           });
         }
       }
+
+      // 빔 인덱스 순서대로 정렬
+      // Sort by beam index
+      layerPoints.sort((a, b) => a.beamIdx - b.beamIdx);
+      
+      // 정렬된 포인트를 최종 배열에 추가
+      // Add sorted points to final array
+      points.push(...layerPoints);
+      
+      currentOffset += layerSizes[layerIdx];
     }
 
     // 다음 모듈로 이동 / Move to next module
