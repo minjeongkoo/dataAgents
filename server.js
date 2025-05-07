@@ -14,17 +14,16 @@ const UDP_PORT = 2115;  // LiDAR 데이터 수신용 UDP 포트
 const HTTP_HOST = '0.0.0.0';
 const HTTP_PORT = '3000';
 
-const httpServer = app.listen(HTTP_PORT, HTTP_HOST, () =>
-  console.log('http server started')
-);
-
-
 // 1) HTTP Server: public 폴더 서빙
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
+
+const httpServer = app.listen(HTTP_PORT, HTTP_HOST, () =>
+  console.log('http server started')
+);
 
 const wss = new WebSocketServer({ server: httpServer });
 wss.on('connection', ws => {
