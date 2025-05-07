@@ -22,7 +22,7 @@ app.get('/', (req, res) => {
 });
 
 const httpServer = app.listen(HTTP_PORT, HTTP_HOST, () =>
-  console.log('http server started')
+  console.log(`LAN ▶ http://${HTTP_HOST}:${HTTP_PORT}`)
 );
 
 const wss = new WebSocketServer({ server: httpServer });
