@@ -31,6 +31,7 @@ def parse_compact(buffer: bytes):
 
     while module_size > 0 and offset + module_size <= len(buffer):
         m = buffer[offset:offset + module_size]
+
         frame_number = int.from_bytes(m[8:16], 'little')
         num_layers = struct.unpack_from('<I', m, 20)[0]
         num_beams  = struct.unpack_from('<I', m, 24)[0]
@@ -54,7 +55,8 @@ def parse_compact(buffer: bytes):
         data_beams = m[mo]; mo += 1
         mo += 1
 
-        echo_size       = ((data_echos & 1) * 2) + ((data_echos & 2) * 2)
+        # each echo type is 2 bytes if present
+        echo_size       = (2 if (data_echos & 1) else 0) + (2 if (data_echos & 2) else 0)
         beam_prop_size  = 1 if (data_beams & 1) else 0
         beam_angle_size = 2 if (data_beams & 2) else 0
         beam_size       = echo_size * num_echos + beam_prop_size + beam_angle_size
@@ -64,10 +66,14 @@ def parse_compact(buffer: bytes):
             for l in range(num_layers):
                 base = data_offset + (b * num_layers + l) * beam_size
                 for ec in range(num_echos):
-                    raw = struct.unpack_from('<H', m, base + ec * echo_size)[0] if echo_size else 0
+                    idx = base + ec * echo_size
+                    # guard against out-of-bounds
+                    if echo_size > 0 and idx + echo_size > len(m):
+                        continue
+                    raw = struct.unpack_from('<H', m, idx)[0] if echo_size else 0
                     d = raw * scaling / 1000.0
                     φ = phi[l]
-                    θ = theta_start[l] + b * ((theta_stop[l] - theta_start[l]) / (num_beams - 1))
+                    θ = theta_start[l] + b * ((theta_stop[l] - theta_start[l]) / max(1, (num_beams - 1)))
                     all_pts.append({
                         'x': d * math.cos(φ) * math.cos(θ),
                         'y': d * math.cos(φ) * math.sin(θ),
@@ -79,7 +85,7 @@ def parse_compact(buffer: bytes):
                     })
 
         module_size = next_module
-        offset     += len(m)
+        offset     += module_size
 
     if frame_number is None:
         return None
@@ -90,10 +96,9 @@ class LiDARProtocol(asyncio.DatagramProtocol):
         global current_frame, frame_points
         try:
             parsed = parse_compact(data)
-        except Exception as e:
-            logging.error("parse_compact error", exc_info=True)
+        except Exception:
+            logging.error("parse_compact failed", exc_info=True)
             return
-
         if not parsed:
             return
 
@@ -108,7 +113,7 @@ class LiDARProtocol(asyncio.DatagramProtocol):
             for ws in list(clients):
                 if not ws.closed:
                     asyncio.create_task(ws.send_str(msg))
-            logging.info(f"Sent frame {current_frame} ({len(frame_points)} points)")
+            logging.info(f"Sent frame {current_frame} ({len(frame_points)} pts)")
             current_frame = frame_number
             frame_points  = []
 
@@ -133,7 +138,7 @@ if __name__ == '__main__':
     try:
         import aiohttp
     except ImportError:
-        logging.error("aiohttp 모듈이 없습니다. 'pip install aiohttp' 실행하세요.")
+        logging.error("aiohttp not installed. Run: pip install aiohttp")
         exit(1)
 
     loop = asyncio.get_event_loop()
