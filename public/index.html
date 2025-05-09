@@ -13,18 +13,27 @@
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
 
-const WS_URL     = `ws://${location.host}/ws`;
-let MAX_POINTS  = 300000;           // 초기 최대 포인트 수 (필요시 동적 재할당)
-const scene     = new THREE.Scene();
-const camera    = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
+const WS_URL = `ws://${location.host}/ws`;
+
+// 센서 설정에 맞춰 수정하세요
+const LAYERS = 16;
+const BEAMS  = 270;
+const ECHOS  = 1;
+const EXPECTED_POINTS = LAYERS * BEAMS * ECHOS;  // 예: 16×270×1 = 4320
+
+let MAX_POINTS = EXPECTED_POINTS * 2; // 혹시 멀티 리턴 대비 여유 2배
+let positions  = new Float32Array(MAX_POINTS * 3);
+
+// Three.js 세팅
+const scene    = new THREE.Scene();
+const camera   = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
 camera.position.set(0, 0, 5);
-const renderer  = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// 한 번만 생성하는 BufferGeometry & Points
-let positions = new Float32Array(MAX_POINTS * 3);
-let geometry  = new THREE.BufferGeometry();
+// 버퍼 지오메트리 & 포인트 메쉬
+let geometry = new THREE.BufferGeometry();
 geometry.setAttribute(
   'position',
   new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
@@ -36,19 +45,26 @@ scene.add(pointsMesh);
 
 // 리사이즈 처리
 window.addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
+  camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
+// WebSocket 연결
 const socket = new WebSocket(WS_URL);
-socket.addEventListener('open',    () => console.log('WS connected'));
-socket.addEventListener('close',   () => console.log('WS disconnected'));
+socket.addEventListener('open',  () => console.log('WS connected'));
+socket.addEventListener('close', () => console.log('WS disconnected'));
 socket.addEventListener('message', ({ data }) => {
-  const pts   = JSON.parse(data);
+  const pts = JSON.parse(data);
   const count = pts.length;
 
-  // 동적 재할당: 들어온 포인트가 MAX_POINTS 초과 시 새 버퍼 생성
+  // → 불완전 스캔 검사  
+  if (count < EXPECTED_POINTS) {
+    console.warn(`Incomplete scan (${count}/${EXPECTED_POINTS}), skipping`);
+    return;
+  }
+
+  // → 필요 시 버퍼 재할당
   if (count > MAX_POINTS) {
     MAX_POINTS = count;
     positions  = new Float32Array(MAX_POINTS * 3);
@@ -58,7 +74,7 @@ socket.addEventListener('message', ({ data }) => {
     );
   }
 
-  // positions 배열에 점 데이터 덮어쓰기
+  // positions 배열 덮어쓰기
   for (let i = 0; i < count; i++) {
     const p = pts[i];
     positions[3*i]   = p.x;
@@ -71,6 +87,7 @@ socket.addEventListener('message', ({ data }) => {
   geometry.attributes.position.needsUpdate = true;
 });
 
+// 애니메이션 루프
 (function animate() {
   requestAnimationFrame(animate);
   renderer.render(scene, camera);
