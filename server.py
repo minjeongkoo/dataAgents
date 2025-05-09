@@ -12,19 +12,15 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 
-# WS 클라이언트
 clients = set()
-# 현재 프레임 누적용
 current_frame = None
 frame_points = []
 
 def parse_compact(buffer: bytes):
     if len(buffer) < 32:
         return None
-    # SOF
     if struct.unpack_from('>I', buffer, 0)[0] != 0x02020202:
         return None
-    # commandId
     if struct.unpack_from('<I', buffer, 4)[0] != 1:
         return None
 
@@ -41,7 +37,6 @@ def parse_compact(buffer: bytes):
         num_echos  = struct.unpack_from('<I', m, 28)[0]
         mo = 32
 
-        # skip Timestamp arrays
         mo += num_layers * 16
 
         phi = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]
@@ -69,8 +64,7 @@ def parse_compact(buffer: bytes):
             for l in range(num_layers):
                 base = data_offset + (b * num_layers + l) * beam_size
                 for ec in range(num_echos):
-                    raw = (struct.unpack_from('<H', m, base + ec * echo_size)[0]
-                           if echo_size else 0)
+                    raw = struct.unpack_from('<H', m, base + ec * echo_size)[0] if echo_size else 0
                     d = raw * scaling / 1000.0
                     φ = phi[l]
                     θ = theta_start[l] + b * ((theta_stop[l] - theta_start[l]) / (num_beams - 1))
@@ -94,11 +88,10 @@ def parse_compact(buffer: bytes):
 class LiDARProtocol(asyncio.DatagramProtocol):
     def datagram_received(self, data, addr):
         global current_frame, frame_points
-
         try:
             parsed = parse_compact(data)
-        except Exception:
-            logging.exception("parse_compact error")
+        except Exception as e:
+            logging.error("parse_compact error", exc_info=True)
             return
 
         if not parsed:
@@ -115,7 +108,7 @@ class LiDARProtocol(asyncio.DatagramProtocol):
             for ws in list(clients):
                 if not ws.closed:
                     asyncio.create_task(ws.send_str(msg))
-            logging.info(f"Frame {current_frame} sent, pts={len(frame_points)}")
+            logging.info(f"Sent frame {current_frame} ({len(frame_points)} points)")
             current_frame = frame_number
             frame_points  = []
 
@@ -137,21 +130,16 @@ app.router.add_get('/ws', websocket_handler)
 app.router.add_static('/', path='public', show_index=True)
 
 if __name__ == '__main__':
-    # 의존성 확인
     try:
-        import aiohttp  # noqa
+        import aiohttp
     except ImportError:
-        logging.error("aiohttp가 설치되어 있지 않습니다. pip install aiohttp")
+        logging.error("aiohttp 모듈이 없습니다. 'pip install aiohttp' 실행하세요.")
         exit(1)
 
     loop = asyncio.get_event_loop()
-    # UDP 서버
-    coro = loop.create_datagram_endpoint(
-        LiDARProtocol, local_addr=('0.0.0.0', 2115)
+    loop.run_until_complete(
+        loop.create_datagram_endpoint(LiDARProtocol, local_addr=('0.0.0.0', 2115))
     )
-    loop.run_until_complete(coro)
-
-    # HTTP+WS 서버
     runner = web.AppRunner(app)
     loop.run_until_complete(runner.setup())
     site = web.TCPSite(runner, '0.0.0.0', 3000)
