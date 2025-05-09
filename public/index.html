@@ -3,25 +3,32 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>LiDAR Viewer</title>
-  <style>body{margin:0;overflow:hidden;}canvas{display:block;}</style>
+  <title>LiDAR 360° Viewer</title>
+  <style>
+    body { margin:0; overflow:hidden; }
+    canvas { display:block; }
+  </style>
 </head>
 <body>
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
 
+const WS_URL    = `ws://${location.host}/ws`;
+const MAX_POINTS = 300000; // 예상 최대 포인트 수에 맞춰 조정
+
+// — Scene/Camera/Renderer 세팅
 const scene    = new THREE.Scene();
 const camera   = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
-camera.position.set(0,0,5);
-const renderer = new THREE.WebGLRenderer({antialias:true});
+camera.position.set(0, 0, 5);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// ——— 초기 한 번만 생성 ———
-let maxPoints = 200000; // 예상 최대 포인트 수 (프레임당)
-const positions = new Float32Array(maxPoints * 3);
+// — BufferGeometry 한 번만 생성
+const positions = new Float32Array(MAX_POINTS * 3);
 const geometry  = new THREE.BufferGeometry();
-geometry.setAttribute('position',
+geometry.setAttribute(
+  'position',
   new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
 );
 geometry.setDrawRange(0, 0);
@@ -30,13 +37,22 @@ const material = new THREE.PointsMaterial({ size: 0.03 });
 const pointsMesh = new THREE.Points(geometry, material);
 scene.add(pointsMesh);
 
-// ——— WebSocket ———
-const socket = new WebSocket(`ws://${location.host}/ws`);
-socket.addEventListener('message', ({data})=>{
-  const pts = JSON.parse(data);
+// — 윈도우 리사이즈 처리
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
 
-  // 필요하다면 최댓값 체크
-  const count = Math.min(pts.length, maxPoints);
+// — WebSocket 연결 & 메시지 처리
+const socket = new WebSocket(WS_URL);
+socket.addEventListener('open', () => console.log('WS connected'));
+socket.addEventListener('close', () => console.log('WS disconnected'));
+socket.addEventListener('message', ({ data }) => {
+  const pts = JSON.parse(data);
+  const count = Math.min(pts.length, MAX_POINTS);
+
+  // positions 배열을 덮어쓰기
   for (let i = 0; i < count; i++) {
     const p = pts[i];
     positions[3*i]   = p.x;
@@ -44,20 +60,13 @@ socket.addEventListener('message', ({data})=>{
     positions[3*i+2] = p.z;
   }
 
-  // 버퍼 draw range, 업데이트 플래그만
+  // 실제 그릴 포인트 수 업데이트
   geometry.setDrawRange(0, count);
   geometry.attributes.position.needsUpdate = true;
 });
 
-// ——— 리사이즈 처리 ———
-window.addEventListener('resize', ()=>{
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// ——— 애니메이션 루프 ———
-(function animate(){
+// — 애니메이션 루프
+(function animate() {
   requestAnimationFrame(animate);
   renderer.render(scene, camera);
 })();
