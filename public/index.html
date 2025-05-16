@@ -1,97 +1,64 @@
-<!-- public/index.html -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>LiDAR 360° Viewer</title>
-  <style>
-    body { margin:0; overflow:hidden; }
-    canvas { display:block; }
-  </style>
+  <title>LiDAR Viewer</title>
+  <style>body{margin:0;overflow:hidden;}canvas{display:block;}</style>
 </head>
 <body>
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
 
-const WS_URL = `ws://${location.host}/ws`;
-
-// 센서 설정에 맞춰 수정하세요
-const LAYERS = 16;
-const BEAMS  = 270;
-const ECHOS  = 1;
-const EXPECTED_POINTS = LAYERS * BEAMS * ECHOS;  // 예: 16×270×1 = 4320
-
-let MAX_POINTS = EXPECTED_POINTS * 2; // 혹시 멀티 리턴 대비 여유 2배
-let positions  = new Float32Array(MAX_POINTS * 3);
-
-// Three.js 세팅
-const scene    = new THREE.Scene();
-const camera   = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
 camera.position.set(0, 0, 5);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// 버퍼 지오메트리 & 포인트 메쉬
-let geometry = new THREE.BufferGeometry();
-geometry.setAttribute(
-  'position',
-  new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
-);
-geometry.setDrawRange(0, 0);
-const material   = new THREE.PointsMaterial({ size: 0.03 });
-const pointsMesh = new THREE.Points(geometry, material);
-scene.add(pointsMesh);
-
-// 리사이즈 처리
-window.addEventListener('resize', () => {
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// WebSocket 연결
-const socket = new WebSocket(WS_URL);
-socket.addEventListener('open',  () => console.log('WS connected'));
-socket.addEventListener('close', () => console.log('WS disconnected'));
-socket.addEventListener('message', ({ data }) => {
+let pointsMesh;
+const socket = new WebSocket(`ws://${location.host}/ws`);
+socket.addEventListener('message', ({data}) => {
   const pts = JSON.parse(data);
-  const count = pts.length;
+  if (pointsMesh) scene.remove(pointsMesh);
 
-  // → 불완전 스캔 검사  
-  if (count < EXPECTED_POINTS) {
-    console.warn(`Incomplete scan (${count}/${EXPECTED_POINTS}), skipping`);
-    return;
-  }
+  const pos = new Float32Array(pts.length * 3);
+  const col = new Float32Array(pts.length * 3);
+  pts.forEach((p, i) => {
+    pos[3*i]   = p.x;
+    pos[3*i+1] = p.y;
+    pos[3*i+2] = p.z;
 
-  // → 필요 시 버퍼 재할당
-  if (count > MAX_POINTS) {
-    MAX_POINTS = count;
-    positions  = new Float32Array(MAX_POINTS * 3);
-    geometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
-    );
-  }
+    const [r, g, b] = layerColor(p.layer);
+    col[3*i]   = r;
+    col[3*i+1] = g;
+    col[3*i+2] = b;
+  });
 
-  // positions 배열 덮어쓰기
-  for (let i = 0; i < count; i++) {
-    const p = pts[i];
-    positions[3*i]   = p.x;
-    positions[3*i+1] = p.y;
-    positions[3*i+2] = p.z;
-  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geometry.setAttribute('color',    new THREE.BufferAttribute(col, 3));
 
-  // 그릴 점 개수 업데이트
-  geometry.setDrawRange(0, count);
-  geometry.attributes.position.needsUpdate = true;
+  const material = new THREE.PointsMaterial({ size: 0.05, vertexColors: true });
+  pointsMesh = new THREE.Points(geometry, material);
+  scene.add(pointsMesh);
 });
 
-// 애니메이션 루프
-(function animate() {
+function layerColor(layer) {
+  const cmap = [
+    [1, 0, 0],   [0, 1, 0],   [0, 0, 1],   [1, 1, 0],
+    [0, 1, 1],   [1, 0, 1],   [1, 0.5, 0], [0.5, 0.5, 0.5],
+    [0.6, 0.3, 0.9], [0.2, 0.8, 0.3], [0.9, 0.2, 0.5], [0.3, 0.3, 0.9],
+    [0.9, 0.6, 0.1], [0.5, 0.9, 0.9], [0.7, 0.1, 0.9], [0.2, 0.2, 0.2]
+  ];
+  return cmap[layer % cmap.length];
+}
+
+function animate() {
   requestAnimationFrame(animate);
   renderer.render(scene, camera);
-})();
+}
+animate();
 </script>
 </body>
 </html>
