@@ -141,3 +141,6 @@ def main():
     logging.info(f"🌐 HTTP ▶ http://0.0.0.0:{HTTP_PORT}")
     logging.info(f"📡 UDP ▶ listening on {UDP_PORT}")
     loop.run_forever()
+
+if __name__ == '__main__':
+    main()
