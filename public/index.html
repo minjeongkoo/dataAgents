@@ -93,4 +93,107 @@
 
     // ↓ 다운샘플링 (성능)
     const skip = rawCount > MAX_DISPLAY_POINTS
-               ? Math.ceil(rawCoun
+               ? Math.ceil(rawCount / MAX_DISPLAY_POINTS)
+               : 1;
+    const count = Math.ceil(rawCount / skip);
+
+    // 버퍼가 모자라면 재할당
+    if (count > MAX_POINTS) {
+      MAX_POINTS = count;
+      positions  = new Float32Array(MAX_POINTS * 3);
+      colors     = new Float32Array(MAX_POINTS * 3);
+      geometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(positions, 3)
+          .setUsage(THREE.DynamicDrawUsage)
+      );
+      geometry.setAttribute(
+        'color',
+        new THREE.BufferAttribute(colors, 3)
+          .setUsage(THREE.DynamicDrawUsage)
+      );
+    }
+
+    // 클러스터별 pts 수집
+    const clusterPtsMap = new Map();
+    let di = 0;
+    for (let i = 0; i < rawCount; i += skip) {
+      const p = pts[i];
+      const { x, y, z, cluster_id: cid } = p;
+
+      // 위치
+      positions[3*di  ] = x;
+      positions[3*di+1] = y;
+      positions[3*di+2] = z;
+
+      // 색상 (황금비 기반 해시)
+      if (!clusterColorMap.has(cid)) {
+        const hue = (cid * 0.618033988749895) % 1;
+        clusterColorMap.set(cid, new THREE.Color().setHSL(hue, 0.7, 0.5));
+      }
+      const c = clusterColorMap.get(cid);
+      colors[3*di  ] = c.r;
+      colors[3*di+1] = c.g;
+      colors[3*di+2] = c.b;
+
+      // 클러스터 맵에 저장
+      if (!clusterPtsMap.has(cid)) clusterPtsMap.set(cid, []);
+      clusterPtsMap.get(cid).push(new THREE.Vector3(x, y, z));
+
+      di++;
+    }
+
+    // 그릴 점 개수 업데이트
+    geometry.setDrawRange(0, di);
+    geometry.attributes.position.needsUpdate = true;
+    geometry.attributes.color.needsUpdate    = true;
+
+    // ── 클러스터 박스/레이블/화살표 갱신 ──
+    clusterGroup.clear();
+    const now = performance.now();
+    const dt  = (now - lastFrameTime)/1000;
+    lastFrameTime = now;
+
+    clusterPtsMap.forEach((ptsArr, cid) => {
+      // 바운딩 박스
+      const box = new THREE.Box3().setFromPoints(ptsArr);
+      const helper = new THREE.Box3Helper(box, clusterColorMap.get(cid));
+      clusterGroup.add(helper);
+
+      // 중심 & 속도 계산
+      const center = box.getCenter(new THREE.Vector3());
+      const prev   = prevCenters.get(cid);
+      let velocity = new THREE.Vector3(0,0,0),
+          speed    = 0;
+      if (prev) {
+        velocity = center.clone().sub(prev.center).divideScalar(dt);
+        speed    = velocity.length();
+      }
+      prevCenters.set(cid, { center, time: now });
+
+      // 움직임 화살표
+      if (speed > 1e-3) {
+        const dir = velocity.clone().normalize();
+        const arrow = new THREE.ArrowHelper(dir, center, speed*0.5, clusterColorMap.get(cid));
+        clusterGroup.add(arrow);
+      }
+
+      // 레이블
+      const div = document.createElement('div');
+      div.className = 'label';
+      div.textContent = `ID:${cid} ${speed.toFixed(2)} m/s`;
+      const label = new CSS2DObject(div);
+      label.position.copy(center);
+      clusterGroup.add(label);
+    });
+  });
+
+  // 애니메이션 루프
+  (function animate() {
+    requestAnimationFrame(animate);
+    renderer.render(scene, camera);
+    labelRenderer.render(scene, camera);
+  })();
+</script>
+</body>
+</html>
