@@ -1,89 +1,82 @@
 <!DOCTYPE html>
 <html lang="ko">
-
 <head>
   <meta charset="UTF-8" />
   <title>LiDAR Viewer</title>
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-    }
-
-    canvas {
-      display: block;
-    }
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
   </style>
 </head>
-
 <body>
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
 
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
-camera.position.set(0, 0, 5);
-const renderer = new THREE.WebGLRenderer({antialias:true});
+const scene    = new THREE.Scene();
+const camera   = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
+camera.position.set(0, 0, 5);
+
 let pointsMesh = null;
 
-function clusterColor(id) {
+// 레이어별 색상맵
+function layerColor(layer) {
   const cmap = [
-    [1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 0],
-    [1, 0, 1], [0, 1, 1], [1, 0.5, 0], [0.5, 0.5, 0.5],
-    [0.6, 0.3, 0.9], [0.2, 0.8, 0.3], [0.9, 0.2, 0.5], [0.3, 0.3, 0.9],
-    [0.9, 0.6, 0.1], [0.5, 0.9, 0.9], [0.7, 0.1, 0.9], [0.2, 0.2, 0.2]
+    [1,0,0], [0,1,0], [0,0,1], [1,1,0],
+    [0,1,1], [1,0,1], [1,0.5,0], [0.5,0.5,0.5],
+    [0.6,0.3,0.9], [0.2,0.8,0.3], [0.9,0.2,0.5], [0.3,0.3,0.9],
+    [0.9,0.6,0.1], [0.5,0.9,0.9], [0.7,0.1,0.9], [0.2,0.2,0.2]
   ];
-  if (id < 0) return [0.3, 0.3, 0.3]; // 노이즈는 회색
-  return cmap[id % cmap.length];
+  return cmap[layer % cmap.length] || [0.3,0.3,0.3];
 }
 
-async function loadScan() {
+function renderPoints(points) {
+  if (pointsMesh) scene.remove(pointsMesh);
+
+  const pos = new Float32Array(points.length * 3);
+  const col = new Float32Array(points.length * 3);
+
+  points.forEach((p, i) => {
+    pos[3*i]   = p.x;
+    pos[3*i+1] = p.y;
+    pos[3*i+2] = p.z;
+    const [r, g, b] = layerColor(p.layer);
+    col[3*i]   = r;
+    col[3*i+1] = g;
+    col[3*i+2] = b;
+  });
+
+  const geom     = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geom.setAttribute('color',    new THREE.BufferAttribute(col, 3));
+  const mat      = new THREE.PointsMaterial({ size: 0.05, vertexColors: true });
+  pointsMesh     = new THREE.Points(geom, mat);
+  scene.add(pointsMesh);
+}
+
+async function fetchAndRender() {
   try {
     const res = await fetch('/latest');
-    if (!res.ok) throw new Error("No scan data");
-    const pts = await res.json();
-
-    if (pointsMesh) scene.remove(pointsMesh);
-
-    const pos = new Float32Array(pts.length * 3);
-    const col = new Float32Array(pts.length * 3);
-
-    pts.forEach((p, i) => {
-      pos[3*i]   = p.x;
-      pos[3*i+1] = p.y;
-      pos[3*i+2] = p.z;
-
-      const [r, g, b] = clusterColor(p.cluster_id);
-      col[3*i]   = r;
-      col[3*i+1] = g;
-      col[3*i+2] = b;
-    });
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geometry.setAttribute('color',    new THREE.BufferAttribute(col, 3));
-
-    const material = new THREE.PointsMaterial({ size: 0.05, vertexColors: true });
-    pointsMesh = new THREE.Points(geometry, material);
-    scene.add(pointsMesh);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.length === 0) return;
+    renderPoints(data);
   } catch (err) {
-    console.warn(err);
+    console.warn('Fetch error:', err);
   }
 }
 
-loadScan(); // 단 한 번만 요청하여 표시
+// 1초마다 갱신
+setInterval(fetchAndRender, 1000);
 
 function animate() {
   requestAnimationFrame(animate);
   renderer.render(scene, camera);
 }
 animate();
-
-    // 주기적으로 JSON 요청 (예: 500ms 마다)
-    setInterval(fetchPoints, 1000);
 </script>
 </body>
 </html>
