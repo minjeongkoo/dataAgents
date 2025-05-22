@@ -163,4 +163,23 @@ async def init_app():
 
 
 async def main():
-    loop = a
+    loop = asyncio.get_running_loop()
+    # UDP 리스너
+    await loop.create_datagram_endpoint(
+        lambda: LiDARProtocol(),
+        local_addr=('0.0.0.0', UDP_PORT)
+    )
+
+    # HTTP + WS 서버
+    app = await init_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site   = web.TCPSite(runner, '0.0.0.0', HTTP_PORT)
+    await site.start()
+
+    logging.info(f'HTTP + WS 서비스 ▶ http://0.0.0.0:{HTTP_PORT}')
+    await asyncio.Future()  # 무한 대기
+
+
+if __name__ == '__main__':
+    asyncio.run(main())
