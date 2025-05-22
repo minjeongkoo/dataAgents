@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>LiDAR 360° Viewer (클러스터 색상)</title>
+  <title>LiDAR 360° 클러스터 뷰어</title>
   <style>
     body { margin:0; overflow:hidden; }
     canvas { display:block; }
@@ -14,85 +14,97 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.m
 
 const WS_URL = `ws://${location.host}/ws`;
 
-let positions, colors, geometry;
-let MAX_POINTS = 0;
+// 예상 포인트 수 (프레임당)
+const EXPECTED_POINTS = 16 * 270 * 1;
 
-// 장면/카메라/렌더러
+// Three.js 세팅
 const scene    = new THREE.Scene();
 const camera   = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
-camera.position.set(0,0,5);
-const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(innerWidth,innerHeight);
+camera.position.set(0, 0, 5);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
 // 버퍼 초기화
-function initGeometry(count){
-  MAX_POINTS = count;
-  positions   = new Float32Array(MAX_POINTS*3);
-  colors      = new Float32Array(MAX_POINTS*3);
-  geometry    = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
-  geometry.setAttribute('color',    new THREE.BufferAttribute(colors,   3).setUsage(THREE.DynamicDrawUsage));
-  geometry.setDrawRange(0, MAX_POINTS);
+let MAX_POINTS = EXPECTED_POINTS * 2;
+let posArr     = new Float32Array(MAX_POINTS*3);
+let colArr     = new Float32Array(MAX_POINTS*3);
+let geometry   = new THREE.BufferGeometry();
+geometry.setAttribute('position',
+  new THREE.BufferAttribute(posArr, 3).setUsage(THREE.DynamicDrawUsage)
+);
+geometry.setAttribute('color',
+  new THREE.BufferAttribute(colArr, 3).setUsage(THREE.DynamicDrawUsage)
+);
+geometry.setDrawRange(0,0);
 
-  const mat = new THREE.PointsMaterial({
-    size: 0.03,
-    vertexColors: true
-  });
-  const pts = new THREE.Points(geometry, mat);
-  scene.clear();
-  scene.add(pts);
-}
+const material = new THREE.PointsMaterial({ size:0.05, vertexColors:true });
+const points   = new THREE.Points(geometry, material);
+scene.add(points);
 
-// 윈도우 리사이즈
-window.addEventListener('resize', ()=>{
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth,innerHeight);
-});
-
-// 클러스터 ID → 색상 매핑 (hue 에 기반한 랜덤)
+// 랜덤 색상 맵 (cluster_id → 색)
 const colorMap = {};
-function getColor(id){
-  if (id < 0) return new THREE.Color(0x888888); // noise: gray
-  if (colorMap[id] === undefined){
-    const hue = (id * 0.618033988749895) % 1; // 황금비 기반
-    colorMap[id] = new THREE.Color().setHSL(hue,1,0.5);
+function getColor(id) {
+  if (id<0) return [0.3,0.3,0.3];  // 잡음은 회색
+  if (!colorMap[id]) {
+    colorMap[id] = [Math.random(), Math.random(), Math.random()];
   }
   return colorMap[id];
 }
 
 // WebSocket
-const socket = new WebSocket(WS_URL);
-socket.addEventListener('open',  ()=>console.log('WS open'));
-socket.addEventListener('close', ()=>console.log('WS close'));
-socket.addEventListener('message', ({data})=>{
+const ws = new WebSocket(WS_URL);
+ws.addEventListener('open',  () => console.log('WS connected'));
+ws.addEventListener('close', () => console.log('WS disconnected'));
+ws.addEventListener('message', ({data})=>{
   const pts = JSON.parse(data);
   const cnt = pts.length;
-
-  if (cnt > MAX_POINTS) initGeometry(cnt);
-
-  for (let i=0; i<cnt; i++){
-    const p = pts[i];
-    positions[3*i]   = p.x;
-    positions[3*i+1] = p.y;
-    positions[3*i+2] = p.z;
-    const col = getColor(p.cluster_id);
-    colors[3*i]   = col.r;
-    colors[3*i+1] = col.g;
-    colors[3*i+2] = col.b;
+  if (cnt < EXPECTED_POINTS*0.8) {
+    console.warn('Incomplete scan, skip');
+    return;
   }
-
+  if (cnt > MAX_POINTS) {
+    MAX_POINTS = cnt;
+    posArr     = new Float32Array(MAX_POINTS*3);
+    colArr     = new Float32Array(MAX_POINTS*3);
+    geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(posArr,3).setUsage(THREE.DynamicDrawUsage)
+    );
+    geometry.setAttribute(
+      'color',
+      new THREE.BufferAttribute(colArr,3).setUsage(THREE.DynamicDrawUsage)
+    );
+  }
+  // 포지션+컬러 채우기
+  for (let i=0; i<cnt; i++) {
+    const p = pts[i];
+    posArr[3*i]   = p.x;
+    posArr[3*i+1] = p.y;
+    posArr[3*i+2] = p.z;
+    const [r,g,b] = getColor(p.cluster_id);
+    colArr[3*i]   = r;
+    colArr[3*i+1] = g;
+    colArr[3*i+2] = b;
+  }
   geometry.setDrawRange(0, cnt);
   geometry.attributes.position.needsUpdate = true;
   geometry.attributes.color.needsUpdate    = true;
 });
 
-// 애니메이션 루프
-(function animate(){
+// 렌더링 루프
+function animate(){
   requestAnimationFrame(animate);
   renderer.render(scene, camera);
-})();
+}
+animate();
+
+// 리사이즈
+window.addEventListener('resize', ()=>{
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
 </script>
 </body>
 </html>
