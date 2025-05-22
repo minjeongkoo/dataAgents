@@ -1,167 +1,107 @@
 <!DOCTYPE html>
 <html lang="ko">
-
 <head>
   <meta charset="UTF-8" />
   <title>LiDAR 360° Cluster Viewer</title>
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-    }
-
-    canvas {
-      display: block;
-    }
-
-    .label {
-      font-family: sans-serif;
-      font-size: 12px;
-      background: rgba(0, 0, 0, 0.6);
-      color: #fff;
-      padding: 2px 4px;
-      border-radius: 2px;
-      white-space: nowrap;
-    }
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+    .label { font-family: sans-serif; font-size: 12px; background: rgba(0,0,0,0.6); color: #fff; padding: 2px 4px; border-radius: 2px; white-space: nowrap; }
   </style>
-
   <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js"
-    }
-  }
+  { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js" } }
   </script>
 </head>
-
 <body>
   <script type="module">
     import * as THREE from 'three';
     import { CSS2DRenderer, CSS2DObject } from 'https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/renderers/CSS2DRenderer.js';
 
-    // WebSocket 설정
-    const WS_URL = `ws://${location.host}/ws`;
-
-    // 예상 포인트 수 (센서 설정에 맞게 조정)
-    const EXPECTED_POINTS = 16 * 270 * 1;  // layers × beams × echoes
-
-    // Three.js 기본 설정
+    const EXPECTED_POINTS = 16 * 270;
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 1000);
-    camera.position.set(0, 0, 5);
+    const camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 1000);
+    camera.position.set(0,0,5);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
-
-    // 레이블 렌더러 (CSS2D)
     const labelRenderer = new CSS2DRenderer();
     labelRenderer.setSize(innerWidth, innerHeight);
     labelRenderer.domElement.style.position = 'absolute';
     labelRenderer.domElement.style.top = '0';
     document.body.appendChild(labelRenderer.domElement);
 
-    // 포인트 클라우드 버퍼
-    let maxPoints = EXPECTED_POINTS * 2;
-    let positions = new Float32Array(maxPoints * 3);
-    let colors = new Float32Array(maxPoints * 3);
-
+    let maxPoints = EXPECTED_POINTS;
+    let positions = new Float32Array(maxPoints*3);
+    let colors    = new Float32Array(maxPoints*3);
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
-    geometry.setDrawRange(0, 0);
-
-    const material = new THREE.PointsMaterial({ size: 0.03, vertexColors: true });
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions,3).setUsage(THREE.DynamicDrawUsage));
+    geometry.setAttribute('color',    new THREE.BufferAttribute(colors,3).setUsage(THREE.DynamicDrawUsage));
+    geometry.setDrawRange(0,0);
+    const material   = new THREE.PointsMaterial({ size:0.03, vertexColors:true });
     const pointsMesh = new THREE.Points(geometry, material);
     scene.add(pointsMesh);
+    const boxGroup = new THREE.Group(); scene.add(boxGroup);
 
-    // 클러스터 박스용 그룹
-    const boxGroup = new THREE.Group();
-    scene.add(boxGroup);
-
-    // 리사이즈 대응
-    window.addEventListener('resize', () => {
-      camera.aspect = innerWidth / innerHeight;
+    window.addEventListener('resize',()=>{
+      camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
       labelRenderer.setSize(innerWidth, innerHeight);
     });
 
-    // WebSocket → 데이터 수신 & 렌더링
-    const socket = new WebSocket(WS_URL);
-    socket.addEventListener('open', () => console.log('WS connected'));
-    socket.addEventListener('close', () => console.log('WS disconnected'));
-    socket.addEventListener('message', ({ data }) => {
+    const socket = new WebSocket(`ws://${location.host}/ws`);
+    let buffer = [];
+    socket.addEventListener('message', ({data})=>{
       const pts = JSON.parse(data);
-      const N = pts.length;
-      if (N < EXPECTED_POINTS) {
-        console.warn(`Incomplete scan (${N}/${EXPECTED_POINTS}), skip`);
-        return;
-      }
+      buffer.push(...pts);
+      if(buffer.length < EXPECTED_POINTS) return;
+      const frame = buffer.splice(0, EXPECTED_POINTS);
 
-      // buffer 크기 재할당
-      if (N > maxPoints) {
-        maxPoints = N;
-        positions = new Float32Array(maxPoints * 3);
-        colors = new Float32Array(maxPoints * 3);
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
-      }
-
-      // 포인트와 클러스터 색상 채우기
-      pts.forEach((p, i) => {
-        positions[3 * i] = p.x;
-        positions[3 * i + 1] = p.y;
-        positions[3 * i + 2] = p.z;
-        // p.cluster_id 기준으로 색상 결정 (HSV → RGB)
-        const hue = (p.cluster_id % 12) / 12;
-        const col = new THREE.Color().setHSL(hue, 0.8, 0.5);
-        colors[3 * i] = col.r;
-        colors[3 * i + 1] = col.g;
-        colors[3 * i + 2] = col.b;
+      // 포인트 & 클러스터 렌더링 재사용
+      frame.forEach((p,i)=>{
+        positions[3*i]   = p.x;
+        positions[3*i+1] = p.y;
+        positions[3*i+2] = p.z;
+        const hue = (p.cluster_id%12)/12;
+        const col = new THREE.Color().setHSL(hue,0.8,0.5);
+        colors[3*i]   = col.r;
+        colors[3*i+1] = col.g;
+        colors[3*i+2] = col.b;
       });
-
-      geometry.setDrawRange(0, N);
+      geometry.setDrawRange(0, EXPECTED_POINTS);
       geometry.attributes.position.needsUpdate = true;
       geometry.attributes.color.needsUpdate = true;
 
-      // 박스 & 레이블 갱신
       boxGroup.clear();
-      // cluster별 bounding box 계산
       const clusters = {};
-      pts.forEach(p => {
-        const id = p.cluster_id;
-        if (id < 0) return; // 잡음 무시
-        if (!clusters[id]) clusters[id] = { min: p, max: p };
-        ['x', 'y', 'z'].forEach(k => {
+      frame.forEach(p=>{
+        const id=p.cluster_id; if(id<0) return;
+        if(!clusters[id]) clusters[id]={min:{...p},max:{...p}};
+        ['x','y','z'].forEach(k=>{
           clusters[id].min[k] = Math.min(clusters[id].min[k], p[k]);
           clusters[id].max[k] = Math.max(clusters[id].max[k], p[k]);
         });
       });
-      Object.entries(clusters).forEach(([id, box]) => {
-        const [min, max] = [box.min, box.max];
-        const geom = new THREE.BoxGeometry(max.x - min.x, max.y - min.y, max.z - min.z);
+      Object.entries(clusters).forEach(([id,box])=>{
+        const {min,max} = box;
+        const geom  = new THREE.BoxGeometry(max.x-min.x, max.y-min.y, max.z-min.z);
         const edges = new THREE.EdgesGeometry(geom);
-        const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffffff }));
-        line.position.set((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2);
+        const line  = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({color:0xffffff}));
+        line.position.set((min.x+max.x)/2,(min.y+max.y)/2,(min.z+max.z)/2);
         boxGroup.add(line);
-
-        // 레이블
-        const div = document.createElement('div');
-        div.className = 'label';
-        div.textContent = `ID ${id}`;
+        const div   = document.createElement('div');
+        div.className='label'; div.textContent = `ID ${id}`;
         const label = new CSS2DObject(div);
-        label.position.set((min.x + max.x) / 2, (min.y + max.y) / 2, max.z);
+        label.position.set((min.x+max.x)/2,(min.y+max.y)/2,max.z);
         boxGroup.add(label);
       });
     });
 
-    // 애니메이션 루프
-    (function animate() {
+    (function animate(){
       requestAnimationFrame(animate);
-      renderer.render(scene, camera);
-      labelRenderer.render(scene, camera);
+      renderer.render(scene,camera);
+      labelRenderer.render(scene,camera);
     })();
   </script>
 </body>
-
 </html>
