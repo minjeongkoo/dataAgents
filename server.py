@@ -10,7 +10,6 @@ import numpy as np
 
 UDP_PORT = 2115
 HTTP_PORT = 3000
-TOTAL_LAYERS = 16
 latest_fullframe = None
 
 logging.basicConfig(
@@ -28,7 +27,7 @@ def parse_compact(buffer: bytes):
     module_size = struct.unpack_from('<I', buffer, 28)[0]
     all_pts = []
     frame_number = None
-    last_module = False
+    next_module_size = None
 
     while module_size > 0 and offset + module_size <= len(buffer):
         m = buffer[offset : offset + module_size]
@@ -45,20 +44,18 @@ def parse_compact(buffer: bytes):
         theta_stop  = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]
         mo         += 4 * num_layers
 
-        scaling     = struct.unpack_from('<f', m, mo)[0]; mo += 4
-        next_module = struct.unpack_from('<I', m, mo)[0]; mo += 4
-        last_module = (next_module == 0)
-
+        scaling         = struct.unpack_from('<f', m, mo)[0]; mo += 4
+        next_module_size = struct.unpack_from('<I', m, mo)[0]; mo += 4
         mo += 1
-        data_echos  = m[mo]; mo += 1
-        data_beams  = m[mo]; mo += 1
+        data_echos      = m[mo]; mo += 1
+        data_beams      = m[mo]; mo += 1
         mo += 1
 
-        echo_size  = (2 if (data_echos & 1) else 0) + (2 if (data_echos & 2) else 0)
-        beam_prop  = 1 if (data_beams & 1) else 0
-        beam_angle = 2 if (data_beams & 2) else 0
-        beam_size  = echo_size * num_echos + beam_prop + beam_angle
-        data_offset = mo
+        echo_size       = (2 if (data_echos & 1) else 0) + (2 if (data_echos & 2) else 0)
+        beam_prop_size  = 1 if (data_beams & 1) else 0
+        beam_angle_size = 2 if (data_beams & 2) else 0
+        beam_size       = echo_size * num_echos + beam_prop_size + beam_angle_size
+        data_offset     = mo
 
         for b in range(num_beams):
             for l in range(num_layers):
@@ -77,7 +74,7 @@ def parse_compact(buffer: bytes):
                     z = d * math.sin(φ)
 
                     if x == 0 and y == 0 and z == 0:
-                        continue  # (0,0,0) 제거
+                        continue
 
                     all_pts.append({
                         'x': x, 'y': y, 'z': z,
@@ -88,9 +85,9 @@ def parse_compact(buffer: bytes):
                     })
 
         offset += module_size
-        module_size = next_module
+        module_size = next_module_size
 
-    return frame_number, all_pts, last_module
+    return frame_number, all_pts, next_module_size == 0
 
 def clusterize(points):
     coords = np.array([[p['x'], p['y'], p['z']] for p in points])
@@ -103,23 +100,24 @@ def clusterize(points):
 
 class FrameProtocol(asyncio.DatagramProtocol):
     def __init__(self):
-        self.buffer = {}
+        self.frames = {}  # frame_number: [point list]
 
     def datagram_received(self, data, addr):
         parsed = parse_compact(data)
-        if not parsed: return
+        if not parsed:
+            return
         frame_num, pts, is_last = parsed
 
-        if frame_num not in self.buffer:
-            self.buffer[frame_num] = []
-        self.buffer[frame_num].extend(pts)
+        if frame_num not in self.frames:
+            self.frames[frame_num] = []
+        self.frames[frame_num].extend(pts)
 
         if is_last:
-            fullframe = self.buffer.pop(frame_num, [])
-            clustered = clusterize(fullframe)
+            full_pts = self.frames.pop(frame_num, [])
+            clustered = clusterize(full_pts)
             global latest_fullframe
             latest_fullframe = json.dumps(clustered)
-            logging.info(f"✅ Fullframe {frame_num} completed ({len(clustered)} pts)")
+            logging.info(f"✅ Fullframe {frame_num} complete ({len(clustered)} pts)")
 
 async def get_latest_scan(request):
     if latest_fullframe:
