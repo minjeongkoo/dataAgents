@@ -2,8 +2,11 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>LiDAR Viewer</title>
-  <style>body{margin:0;overflow:hidden;}canvas{display:block;}</style>
+  <title>LiDAR 360° Cluster Viewer</title>
+  <style>
+    body { margin:0; overflow:hidden; }
+    canvas { display:block; }
+  </style>
 </head>
 <body>
 <script type="module">
@@ -13,6 +16,8 @@ const WS_URL = `ws://${location.host}/ws`;
 
 let MAX_POINTS = 0;
 let positions  = new Float32Array(0);
+let colors     = new Float32Array(0);
+const clusterColorMap = new Map();
 
 // Three.js 세팅
 const scene    = new THREE.Scene();
@@ -24,8 +29,9 @@ document.body.appendChild(renderer.domElement);
 
 let geometry = new THREE.BufferGeometry();
 geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
 geometry.setDrawRange(0, 0);
-const material   = new THREE.PointsMaterial({ size: 0.03 });
+const material   = new THREE.PointsMaterial({ size: 0.03, vertexColors: true });
 const pointsMesh = new THREE.Points(geometry, material);
 scene.add(pointsMesh);
 
@@ -42,26 +48,37 @@ socket.addEventListener('message', ({ data }) => {
   const pts = JSON.parse(data);
   const count = pts.length;
 
-  // 만약 이전에 할당했던 배열보다 커야만 재할당
+  // 배열이 부족하면 재할당
   if (count > MAX_POINTS) {
     MAX_POINTS = count;
     positions  = new Float32Array(MAX_POINTS * 3);
-    geometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
-    );
+    colors     = new Float32Array(MAX_POINTS * 3);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+    geometry.setAttribute('color',    new THREE.BufferAttribute(colors,    3).setUsage(THREE.DynamicDrawUsage));
   }
 
-  // positions에 덮어쓰기
+  // 각 포인트에 위치와 색상 적용
   for (let i = 0; i < count; i++) {
-    const { x, y, z } = pts[i];
-    positions[3*i]   = x;
-    positions[3*i+1] = y;
-    positions[3*i+2] = z;
+    const p = pts[i];
+    positions[3*i]   = p.x;
+    positions[3*i+1] = p.y;
+    positions[3*i+2] = p.z;
+
+    // cluster_id에 대응하는 색상이 없으면 새로 생성
+    const cid = p.cluster_id;
+    if (!clusterColorMap.has(cid)) {
+      const col = new THREE.Color().setHSL((cid * 0.618033988749895) % 1, 0.7, 0.5);
+      clusterColorMap.set(cid, col);
+    }
+    const col = clusterColorMap.get(cid);
+    colors[3*i]   = col.r;
+    colors[3*i+1] = col.g;
+    colors[3*i+2] = col.b;
   }
 
   geometry.setDrawRange(0, count);
   geometry.attributes.position.needsUpdate = true;
+  geometry.attributes.color.needsUpdate    = true;
 });
 
 (function animate() {
