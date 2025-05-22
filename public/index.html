@@ -43,11 +43,12 @@ window.addEventListener('resize', ()=>{
 });
 
 const socket = new WebSocket(WS_URL);
+socket.addEventListener('open',  ()=>console.log('WS open'));
+socket.addEventListener('close', ()=>console.log('WS close'));
 socket.addEventListener('message', ({data})=>{
   const pts = JSON.parse(data);
   const cnt = pts.length;
 
-  // 최초 수신 시 geometry 초기화
   if (cnt > MAX_POINTS) initGeometry(cnt);
 
   for (let i=0; i<cnt; i++){
@@ -63,7 +64,7 @@ socket.addEventListener('message', ({data})=>{
 
 (function animate(){
   requestAnimationFrame(animate);
-  renderer.render(scene,camera);
+  renderer.render(scene, camera);
 })();
 </script>
 </body>
