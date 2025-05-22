@@ -7,13 +7,11 @@ import logging
 from aiohttp import web
 from sklearn.cluster import DBSCAN
 
-# ─── 설정 ─────────────────────────────────────────────────────────
 UDP_PORT            = 2115
 HTTP_PORT           = 3000
 DBSCAN_EPS          = 0.3    # DBSCAN 반경 (미터)
 DBSCAN_MIN_SAMPLES  = 10     # DBSCAN 최소 샘플
 MAX_MATCH_DIST      = 0.5    # Stable ID 매칭 최대 거리 (미터)
-# ─────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,11 +26,7 @@ next_cluster_id = 0
 prev_centroids  = {}   # {stable_id: (x,y,z)}
 
 def assign_stable_ids(raw_clusters):
-    """
-    raw_clusters: List of {'pts': [...], 'centroid': (x,y,z)}
-    noise cluster은 label=-1로 이미 처리된 상태여야 함.
-    반환: 각 p 에 p['cluster_id'] 가 달린 flat list
-    """
+    
     global next_cluster_id, prev_centroids
 
     new_centroids = {}
@@ -50,7 +44,7 @@ def assign_stable_ids(raw_clusters):
             assignments[i] = best_id
             new_centroids[best_id] = (cx,cy,cz)
 
-    # 2) 매칭 안 된 새 클러스터에 신 ID 부여
+    # 2) 매칭 안 된 새 클러스터에 새로운 ID 부여
     for i, rc in enumerate(raw_clusters):
         if i not in assignments:
             assignments[i] = next_cluster_id
@@ -70,7 +64,7 @@ def assign_stable_ids(raw_clusters):
     return output
 
 def parse_compact(buffer: bytes):
-    """Compact Format 파싱 → frame_number, pts list 반환"""
+    # Compact Format 파싱 → frame_number, pts list 반환
     if len(buffer) < 32: return None
     if struct.unpack_from('>I', buffer, 0)[0] != 0x02020202: return None
     if struct.unpack_from('<I', buffer, 4)[0] != 1:          return None
@@ -138,7 +132,7 @@ def parse_compact(buffer: bytes):
     return frame_number, all_pts
 
 def process_frame(pts):
-    """1) 잡음 제거(0,0,0) → 2) DBSCAN → 3) Stable ID 부착 → flat pts list 리턴"""
+    # 1) 잡음 제거(0,0,0) → 2) DBSCAN → 3) Stable ID 부착 → flat pts list 리턴
     # 1) (0,0,0) 포인트 제거
     pts = [p for p in pts if not (p['x']==0 and p['y']==0 and p['z']==0)]
     if not pts:

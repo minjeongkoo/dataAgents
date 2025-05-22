@@ -1,6 +1,7 @@
 # 의존성
 node_modules/
 package-lock.json
+.venv/
 
 # 환경 변수
 .env
