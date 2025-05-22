@@ -5,19 +5,21 @@ import struct
 import json
 import logging
 from aiohttp import web
+from sklearn.cluster import DBSCAN
+import numpy as np
 
 # 설정
 UDP_PORT     = 2115
 HTTP_PORT    = 3000
 TOTAL_LAYERS = 16
 
+latest_fullframe = None  # 가장 최근 fullframe JSON 저장
+
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(message)s',
     datefmt='%H:%M:%S'
 )
-
-clients = set()
 
 def parse_compact(buffer: bytes):
     if len(buffer) < 32:
@@ -91,6 +93,15 @@ def parse_compact(buffer: bytes):
 
     return frame_number, all_pts, last_module
 
+def clusterize(points):
+    coords = np.array([[p['x'], p['y'], p['z']] for p in points])
+    if len(coords) == 0:
+        return points
+    db = DBSCAN(eps=0.3, min_samples=10).fit(coords)
+    labels = db.labels_
+    for i, label in enumerate(labels):
+        points[i]['cluster_id'] = int(label)
+    return points
 
 class FrameProtocol(asyncio.DatagramProtocol):
     def __init__(self):
@@ -109,11 +120,10 @@ class FrameProtocol(asyncio.DatagramProtocol):
         if frame_num == self.frame:
             self.accum.extend(pts)
             if is_last:
-                msg = json.dumps(self.accum)
-                for ws in list(clients):
-                    if not ws.closed:
-                        asyncio.create_task(ws.send_str(msg))
-                logging.info(f"✅ Sent full 360° scan frame {self.frame} ({len(self.accum)} pts)")
+                clustered = clusterize(self.accum)
+                global latest_fullframe
+                latest_fullframe = json.dumps(clustered)  # 메모리에 저장
+                logging.info(f"✅ Full 360° scan frame {self.frame} saved ({len(clustered)} pts)")
                 self.frame = None
                 self.accum.clear()
         else:
@@ -121,26 +131,19 @@ class FrameProtocol(asyncio.DatagramProtocol):
             self.frame = frame_num
             self.accum = list(pts)
 
-
-async def websocket_handler(request):
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
-    clients.add(ws)
-    logging.info("🟢 WebSocket connected")
-    async for _ in ws:
-        pass
-    clients.discard(ws)
-    logging.info("🔴 WebSocket disconnected")
-    return ws
-
+async def get_latest_scan(request):
+    global latest_fullframe
+    if latest_fullframe:
+        return web.Response(text=latest_fullframe, content_type='application/json')
+    else:
+        return web.Response(status=204, text='No data yet')
 
 def main():
     import os
     if not os.path.isdir("public"):
-        os.mkdir("public")  # 혹시 없으면 생성
-
+        os.mkdir("public")
     app = web.Application()
-    app.router.add_get('/ws', websocket_handler)
+    app.router.add_get('/scan', get_latest_scan)
     app.router.add_static('/', path='public', show_index=True)
 
     loop = asyncio.get_event_loop()
@@ -151,10 +154,9 @@ def main():
     loop.run_until_complete(runner.setup())
     loop.run_until_complete(web.TCPSite(runner, '0.0.0.0', HTTP_PORT).start())
 
-    logging.info(f"🌐 http://0.0.0.0:{HTTP_PORT} ready")
+    logging.info(f"🌐 http://0.0.0.0:{HTTP_PORT}")
     logging.info(f"📡 UDP listening on {UDP_PORT}")
     loop.run_forever()
-
 
 if __name__ == '__main__':
     main()
