@@ -28,37 +28,47 @@ def parse_compact(buffer: bytes):
     offset = 32
     module_size = struct.unpack_from('<I', buffer, 28)[0]
     pts = []
-    last_module = False
+    frame_num = None
 
     while module_size > 0 and offset + module_size <= len(buffer):
-        m = buffer[offset:offset+module_size]
+        m = buffer[offset:offset + module_size]
+
+        # FrameNumber(8..16), SegmentCounter(0..8) 중 프레임 구분에는 FrameNumber 사용
+        frame_num = int.from_bytes(m[8:16], 'little')
+
         num_layers = struct.unpack_from('<I', m, 20)[0]
         num_beams  = struct.unpack_from('<I', m, 24)[0]
         num_echos  = struct.unpack_from('<I', m, 28)[0]
 
-        mo = 32 + num_layers*16  # TimestampStart/Stop 건너뛰기
+        # metadata 건너뛰기
+        mo = 32 + num_layers*16
 
-        phi         = [struct.unpack_from('<f', m, mo+4*i)[0] for i in range(num_layers)]
-        mo         += 4 * num_layers
-        theta_start = [struct.unpack_from('<f', m, mo+4*i)[0] for i in range(num_layers)]
-        mo         += 4 * num_layers
-        theta_stop  = [struct.unpack_from('<f', m, mo+4*i)[0] for i in range(num_layers)]
-        mo         += 4 * num_layers
+        # Phi
+        phi = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]
+        mo += 4*num_layers
+        # ThetaStart / ThetaStop
+        theta_start = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]
+        mo += 4*num_layers
+        theta_stop  = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]
+        mo += 4*num_layers
 
+        # Scaling, next_module
         scaling     = struct.unpack_from('<f', m, mo)[0]; mo += 4
         next_module = struct.unpack_from('<I', m, mo)[0]; mo += 4
-        last_module = (next_module == 0)
 
+        # flags
         mo += 1
         data_echos  = m[mo]; mo += 1
         data_beams  = m[mo]; mo += 2
 
+        # beam byte 크기 계산
         echo_size       = (2 if data_echos & 1 else 0) + (2 if data_echos & 2 else 0)
         beam_prop_size  = 1 if data_beams & 1 else 0
         beam_angle_size = 2 if data_beams & 2 else 0
         beam_size       = echo_size*num_echos + beam_prop_size + beam_angle_size
         data_offset     = mo
 
+        # point 생성
         for b in range(num_beams):
             for l in range(num_layers):
                 base = data_offset + (b*num_layers + l)*beam_size
@@ -66,36 +76,59 @@ def parse_compact(buffer: bytes):
                     idx = base + ec*echo_size
                     if echo_size and idx+echo_size > len(m): continue
                     raw = struct.unpack_from('<H', m, idx)[0] if echo_size else 0
-                    dist = raw * scaling / 1000.0
-                    φ = phi[l]
-                    θ = theta_start[l] + b * ((theta_stop[l] - theta_start[l]) / max(1, num_beams-1))
-                    x = dist*math.cos(φ)*math.cos(θ)
-                    y = dist*math.cos(φ)*math.sin(θ)
-                    z = dist*math.sin(φ)
-                    if x==0 and y==0 and z==0: continue  # (0,0,0) 제거
-                    pts.append({'x': x, 'y': y, 'z': z, 'layer': l})
+                    d   = raw * scaling / 1000.0
+                    φ   = phi[l]
+                    θ   = theta_start[l] + b*((theta_stop[l] - theta_start[l]) / max(1, num_beams-1))
+                    x = d*math.cos(φ)*math.cos(θ)
+                    y = d*math.cos(φ)*math.sin(θ)
+                    z = d*math.sin(φ)
+                    # (0,0,0) 포인트 제거
+                    if x==0 and y==0 and z==0: continue
+                    pts.append({'x':x,'y':y,'z':z,'layer':l,'theta':θ})
+
         offset += module_size
         module_size = next_module
 
-    return pts, last_module
+    if frame_num is None:
+        return None
+    return frame_num, pts
 
 
 class FrameProtocol(asyncio.DatagramProtocol):
+    """FrameNumber 변화 시 전체 360° 스캔 데이터 전송"""
     def __init__(self):
-        self.accum = []
+        self.last_frame = None
+        self.accum_pts  = []
 
     def datagram_received(self, data, addr):
         parsed = parse_compact(data)
         if not parsed: return
-        pts, is_last = parsed
+        frame_num, pts = parsed
 
-        self.accum.extend(pts)
+        if self.last_frame is None:
+            self.last_frame = frame_num
 
-        if is_last:
+        # FrameNumber가 바뀌면 이전 한 바퀴 데이터 전송
+        if frame_num != self.last_frame:
             global latest_frame
-            latest_frame = list(self.accum)
-            logging.info(f"frame ready ({len(latest_frame)} points)")
-            self.accum.clear()
+            latest_frame = list(self.accum_pts)
+            logging.info(f"✅ Full frame {self.last_frame} → {len(latest_frame)} pts")
+            self.accum_pts  = []
+            self.last_frame = frame_num
+
+        self.accum_pts.extend(pts)
+
+
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+    logging.info("🟢 WebSocket connected")
+    try:
+        async for _ in ws:
+            pass
+    finally:
+        logging.info("🔴 WebSocket disconnected")
+    return ws
 
 
 async def get_latest(request):
@@ -106,22 +139,23 @@ async def get_latest(request):
 
 
 def main():
-    # public 폴더가 없으면 생성
+    # public 폴더 확인
     if not os.path.isdir('public'):
         os.mkdir('public')
-        logging.info("📁 Created 'public' directory; please put index.html inside it.")
+        logging.info("📁 ‘public’ 폴더를 생성했습니다. index.html 을 그 안에 넣어주세요.")
 
-    # 이벤트 루프에 UDP 프로토콜 등록
+    # UDP 리스너
     loop = asyncio.get_event_loop()
     loop.run_until_complete(
-        loop.create_datagram_endpoint(lambda: FrameProtocol(),
-                                      local_addr=('0.0.0.0', UDP_PORT))
+        loop.create_datagram_endpoint(
+            lambda: FrameProtocol(),
+            local_addr=('0.0.0.0', UDP_PORT))
     )
 
-    # HTTP 서버 설정
+    # HTTP 서버
     app = web.Application()
+    app.router.add_get('/ws', websocket_handler)
     app.router.add_get('/latest', get_latest)
-    # 정적 파일 서빙: public/index.html 등을 제공
     app.router.add_static('/', path='./public', show_index=True)
 
     runner = web.AppRunner(app)
@@ -134,5 +168,4 @@ def main():
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
     main()
