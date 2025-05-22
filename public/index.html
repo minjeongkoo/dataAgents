@@ -2,11 +2,8 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>LiDAR 360° 클러스터 뷰어</title>
-  <style>
-    body { margin:0; overflow:hidden; }
-    canvas { display:block; }
-  </style>
+  <title>LiDAR Viewer</title>
+  <style>body{margin:0;overflow:hidden;}canvas{display:block;}</style>
 </head>
 <body>
 <script type="module">
@@ -14,8 +11,8 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.m
 
 const WS_URL = `ws://${location.host}/ws`;
 
-// 예상 포인트 수 (프레임당)
-const EXPECTED_POINTS = 16 * 270 * 1;
+let MAX_POINTS = 0;
+let positions  = new Float32Array(0);
 
 // Three.js 세팅
 const scene    = new THREE.Scene();
@@ -25,86 +22,52 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// 버퍼 초기화
-let MAX_POINTS = EXPECTED_POINTS * 2;
-let posArr     = new Float32Array(MAX_POINTS*3);
-let colArr     = new Float32Array(MAX_POINTS*3);
-let geometry   = new THREE.BufferGeometry();
-geometry.setAttribute('position',
-  new THREE.BufferAttribute(posArr, 3).setUsage(THREE.DynamicDrawUsage)
-);
-geometry.setAttribute('color',
-  new THREE.BufferAttribute(colArr, 3).setUsage(THREE.DynamicDrawUsage)
-);
-geometry.setDrawRange(0,0);
+let geometry = new THREE.BufferGeometry();
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geometry.setDrawRange(0, 0);
+const material   = new THREE.PointsMaterial({ size: 0.03 });
+const pointsMesh = new THREE.Points(geometry, material);
+scene.add(pointsMesh);
 
-const material = new THREE.PointsMaterial({ size:0.05, vertexColors:true });
-const points   = new THREE.Points(geometry, material);
-scene.add(points);
-
-// 랜덤 색상 맵 (cluster_id → 색)
-const colorMap = {};
-function getColor(id) {
-  if (id<0) return [0.3,0.3,0.3];  // 잡음은 회색
-  if (!colorMap[id]) {
-    colorMap[id] = [Math.random(), Math.random(), Math.random()];
-  }
-  return colorMap[id];
-}
-
-// WebSocket
-const ws = new WebSocket(WS_URL);
-ws.addEventListener('open',  () => console.log('WS connected'));
-ws.addEventListener('close', () => console.log('WS disconnected'));
-ws.addEventListener('message', ({data})=>{
-  const pts = JSON.parse(data);
-  const cnt = pts.length;
-  if (cnt < EXPECTED_POINTS*0.8) {
-    console.warn('Incomplete scan, skip');
-    return;
-  }
-  if (cnt > MAX_POINTS) {
-    MAX_POINTS = cnt;
-    posArr     = new Float32Array(MAX_POINTS*3);
-    colArr     = new Float32Array(MAX_POINTS*3);
-    geometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(posArr,3).setUsage(THREE.DynamicDrawUsage)
-    );
-    geometry.setAttribute(
-      'color',
-      new THREE.BufferAttribute(colArr,3).setUsage(THREE.DynamicDrawUsage)
-    );
-  }
-  // 포지션+컬러 채우기
-  for (let i=0; i<cnt; i++) {
-    const p = pts[i];
-    posArr[3*i]   = p.x;
-    posArr[3*i+1] = p.y;
-    posArr[3*i+2] = p.z;
-    const [r,g,b] = getColor(p.cluster_id);
-    colArr[3*i]   = r;
-    colArr[3*i+1] = g;
-    colArr[3*i+2] = b;
-  }
-  geometry.setDrawRange(0, cnt);
-  geometry.attributes.position.needsUpdate = true;
-  geometry.attributes.color.needsUpdate    = true;
-});
-
-// 렌더링 루프
-function animate(){
-  requestAnimationFrame(animate);
-  renderer.render(scene, camera);
-}
-animate();
-
-// 리사이즈
-window.addEventListener('resize', ()=>{
+window.addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+const socket = new WebSocket(WS_URL);
+socket.addEventListener('open',  () => console.log('WS connected'));
+socket.addEventListener('close', () => console.log('WS disconnected'));
+socket.addEventListener('message', ({ data }) => {
+  const pts = JSON.parse(data);
+  const count = pts.length;
+
+  // 만약 이전에 할당했던 배열보다 커야만 재할당
+  if (count > MAX_POINTS) {
+    MAX_POINTS = count;
+    positions  = new Float32Array(MAX_POINTS * 3);
+    geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
+    );
+  }
+
+  // positions에 덮어쓰기
+  for (let i = 0; i < count; i++) {
+    const { x, y, z } = pts[i];
+    positions[3*i]   = x;
+    positions[3*i+1] = y;
+    positions[3*i+2] = z;
+  }
+
+  geometry.setDrawRange(0, count);
+  geometry.attributes.position.needsUpdate = true;
+});
+
+(function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+})();
 </script>
 </body>
 </html>
