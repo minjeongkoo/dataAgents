@@ -5,6 +5,7 @@ import struct
 import json
 import logging
 from aiohttp import web
+import os
 
 # 설정
 UDP_PORT  = 2115
@@ -71,8 +72,7 @@ def parse_compact(buffer: bytes):
                     x = dist*math.cos(φ)*math.cos(θ)
                     y = dist*math.cos(φ)*math.sin(θ)
                     z = dist*math.sin(φ)
-                    # (0,0,0) 점은 노이즈로 간주하고 제거
-                    if x==0 and y==0 and z==0: continue
+                    if x==0 and y==0 and z==0: continue  # (0,0,0) 제거
                     pts.append({'x': x, 'y': y, 'z': z, 'layer': l})
         offset += module_size
         module_size = next_module
@@ -82,7 +82,6 @@ def parse_compact(buffer: bytes):
 
 class FrameProtocol(asyncio.DatagramProtocol):
     def __init__(self):
-        self.current_frame = None
         self.accum = []
 
     def datagram_received(self, data, addr):
@@ -90,20 +89,12 @@ class FrameProtocol(asyncio.DatagramProtocol):
         if not parsed: return
         pts, is_last = parsed
 
-        # 첫 모듈이면 새 프레임 시작
-        if self.current_frame is None:
-            self.current_frame = True  # 프레임 구분용; 실제 번호 사용하려면 parse에서 함께 리턴하도록 변경
-
-        # 누적
         self.accum.extend(pts)
 
-        # 마지막 모듈 도착 시 full-frame 확정
         if is_last:
             global latest_frame
-            latest_frame = list(self.accum)  # deep copy
-            logging.info(f"✅ Full 360° frame ready ({len(latest_frame)} points)")
-            # 다음 프레임을 위해 초기화
-            self.current_frame = None
+            latest_frame = list(self.accum)
+            logging.info(f"frame ready ({len(latest_frame)} points)")
             self.accum.clear()
 
 
@@ -111,27 +102,36 @@ async def get_latest(request):
     if latest_frame:
         return web.json_response(latest_frame)
     else:
-        # 데이터가 아직 준비되지 않음
         raise web.HTTPNoContent()
 
-def main():
-    loop = asyncio.get_event_loop()
-    # UDP 리스너
-    listen = loop.create_datagram_endpoint(lambda: FrameProtocol(),
-                                           local_addr=('0.0.0.0', UDP_PORT))
-    loop.run_until_complete(listen)
 
-    # HTTP 서버
+def main():
+    # public 폴더가 없으면 생성
+    if not os.path.isdir('public'):
+        os.mkdir('public')
+        logging.info("📁 Created 'public' directory; please put index.html inside it.")
+
+    # 이벤트 루프에 UDP 프로토콜 등록
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(
+        loop.create_datagram_endpoint(lambda: FrameProtocol(),
+                                      local_addr=('0.0.0.0', UDP_PORT))
+    )
+
+    # HTTP 서버 설정
     app = web.Application()
     app.router.add_get('/latest', get_latest)
+    # 정적 파일 서빙: public/index.html 등을 제공
+    app.router.add_static('/', path='./public', show_index=True)
+
     runner = web.AppRunner(app)
     loop.run_until_complete(runner.setup())
-    site = web.TCPSite(runner, '0.0.0.0', HTTP_PORT)
-    loop.run_until_complete(site.start())
+    loop.run_until_complete(web.TCPSite(runner, '0.0.0.0', HTTP_PORT).start())
 
     logging.info(f"📡 UDP listening on {UDP_PORT}")
-    logging.info(f"🌐 HTTP ▶ http://0.0.0.0:{HTTP_PORT}/latest")
+    logging.info(f"🌐 HTTP ▶ http://0.0.0.0:{HTTP_PORT}/")
     loop.run_forever()
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
