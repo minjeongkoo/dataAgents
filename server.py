@@ -4,8 +4,12 @@ import math
 import struct
 import json
 import logging
-from aiohttp import web
 import os
+
+from aiohttp import web
+
+import numpy as np
+from sklearn.cluster import DBSCAN
 
 # —— 설정 —— #
 UDP_PORT  = 2115
@@ -17,15 +21,11 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 
-# WebSocket 클라이언트들
 clients = set()
-# UDP raw 데이터 큐
 udp_queue = asyncio.Queue()
-# 마지막 완성된 프레임
 latest_frame = []
 
 def parse_compact(buffer: bytes):
-    """SICK Compact format 파싱 (0,0,0 포인트는 버림)"""
     if len(buffer) < 32: return None
     if struct.unpack_from('>I', buffer, 0)[0] != 0x02020202: return None
     if struct.unpack_from('<I', buffer, 4)[0] != 1:      return None
@@ -72,7 +72,7 @@ def parse_compact(buffer: bytes):
         beam_size       = echo_size*num_echos + beam_prop_size + beam_angle_size
         data_offset     = mo
 
-        # 포인트 생성
+        # 포인트 생성 (0,0,0은 버림)
         for b in range(num_beams):
             for l in range(num_layers):
                 base = data_offset + (b*num_layers + l)*beam_size
@@ -82,11 +82,11 @@ def parse_compact(buffer: bytes):
                     raw = struct.unpack_from('<H', m, idx)[0] if echo_size else 0
                     d   = raw * scaling / 1000.0
                     φ   = phi[l]
-                    θ   = theta_start[l] + b * ((theta_stop[l] - theta_start[l]) / max(1, num_beams-1))
+                    θ   = theta_start[l] + b*((theta_stop[l]-theta_start[l]) / max(1, num_beams-1))
                     x = d*math.cos(φ)*math.cos(θ)
                     y = d*math.cos(φ)*math.sin(θ)
                     z = d*math.sin(φ)
-                    if x==0 and y==0 and z==0:  # 0,0,0 포인트 제거
+                    if x==0 and y==0 and z==0: 
                         continue
                     pts.append({'x':x,'y':y,'z':z,'layer':l,'theta':θ})
 
@@ -121,7 +121,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         udp_queue.put_nowait(data)
 
 async def consume_udp():
-    """UDP 큐에서 꺼내 파싱 + 누적 + full-frame 완성 시 WebSocket broadcast"""
+    """UDP 큐에서 꺼내 파싱 + 누적 + full-frame 완성 시 클러스터링 & WebSocket broadcast"""
     global latest_frame
     accum = FrameAccumulator()
     while True:
@@ -131,13 +131,20 @@ async def consume_udp():
             continue
         frame_num, pts = parsed
         done = accum.add(frame_num, pts)
-        if done is not None:
+        if done is not None and len(done):
+            # — 클러스터링 — #
+            coords = np.array([[p['x'],p['y'],p['z']] for p in done])
+            db     = DBSCAN(eps=0.3, min_samples=10).fit(coords)
+            labels = db.labels_
+            for i, p in enumerate(done):
+                p['cluster_id'] = int(labels[i])
+
             latest_frame = done
             msg = json.dumps(latest_frame)
             for ws in list(clients):
                 if not ws.closed:
                     asyncio.create_task(ws.send_str(msg))
-            logging.info(f"✅ Full frame {frame_num} sent, {len(done)} pts")
+            logging.info(f"✅ Full frame {frame_num} sent, {len(done)} pts, clusters={len(set(labels))}")
 
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
@@ -156,13 +163,11 @@ async def get_latest(request):
     raise web.HTTPNoContent()
 
 def main():
-    # public 폴더 체크
     if not os.path.isdir('public'):
         os.mkdir('public')
         logging.info("📁 public/ 폴더 생성 후 index.html을 넣어주세요.")
 
     loop = asyncio.get_event_loop()
-    # 1) UDP 리스너
     loop.run_until_complete(
         loop.create_datagram_endpoint(
             lambda: UDPProtocol(),
@@ -171,7 +176,6 @@ def main():
     )
     loop.create_task(consume_udp())
 
-    # 2) HTTP + WebSocket 서버
     app = web.Application()
     app.router.add_get('/ws', websocket_handler)
     app.router.add_get('/latest', get_latest)
