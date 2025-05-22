@@ -8,12 +8,10 @@ from aiohttp import web
 from sklearn.cluster import DBSCAN
 import numpy as np
 
-# 설정
-UDP_PORT     = 2115
-HTTP_PORT    = 3000
+UDP_PORT = 2115
+HTTP_PORT = 3000
 TOTAL_LAYERS = 16
-
-latest_fullframe = None  # 최신 fullframe 데이터 저장
+latest_fullframe = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,8 +50,8 @@ def parse_compact(buffer: bytes):
         last_module = (next_module == 0)
 
         mo += 1
-        data_echos = m[mo]; mo += 1
-        data_beams = m[mo]; mo += 1
+        data_echos  = m[mo]; mo += 1
+        data_beams  = m[mo]; mo += 1
         mo += 1
 
         echo_size  = (2 if (data_echos & 1) else 0) + (2 if (data_echos & 2) else 0)
@@ -70,14 +68,17 @@ def parse_compact(buffer: bytes):
                     if echo_size > 0 and idx + echo_size > len(m):
                         continue
                     raw = struct.unpack_from('<H', m, idx)[0] if echo_size else 0
-                    d   = raw * scaling / 1000.0
-                    φ   = phi[l]
-                    θ   = theta_start[l] + b * ((theta_stop[l] - theta_start[l]) / max(1, num_beams - 1))
+                    d = raw * scaling / 1000.0
+                    φ = phi[l]
+                    θ = theta_start[l] + b * ((theta_stop[l] - theta_start[l]) / max(1, num_beams - 1))
                     all_pts.append({
                         'x': d * math.cos(φ) * math.cos(θ),
                         'y': d * math.cos(φ) * math.sin(θ),
                         'z': d * math.sin(φ),
-                        'layer': l
+                        'layer': l,
+                        'channel': ec,
+                        'beamIdx': b,
+                        'theta': θ
                     })
 
         offset += module_size
@@ -96,38 +97,35 @@ def clusterize(points):
 
 class FrameProtocol(asyncio.DatagramProtocol):
     def __init__(self):
-        self.frame = None
-        self.accum = []
+        self.buffer = {}
+        self.frame_last_flag = {}
 
     def datagram_received(self, data, addr):
         parsed = parse_compact(data)
         if not parsed: return
         frame_num, pts, is_last = parsed
 
-        if self.frame is None:
-            self.frame = frame_num
+        if frame_num not in self.buffer:
+            self.buffer[frame_num] = []
+        self.buffer[frame_num].extend(pts)
 
-        if frame_num == self.frame:
-            self.accum.extend(pts)
-            if is_last:
-                clustered = clusterize(self.accum)
-                global latest_fullframe
-                latest_fullframe = json.dumps(clustered)
-                logging.info(f"✅ Fullframe {frame_num} complete ({len(clustered)} pts)")
-                self.frame = None
-                self.accum.clear()
-        else:
-            logging.warning(f"⚠️ Frame mismatch: {frame_num} ≠ {self.frame}, discard")
-            self.frame = frame_num
-            self.accum = list(pts)
+        if is_last:
+            fullframe = self.buffer.pop(frame_num, [])
+            clustered = clusterize(fullframe)
+            global latest_fullframe
+            latest_fullframe = json.dumps(clustered)
+            logging.info(f"✅ Fullframe {frame_num} completed ({len(clustered)} pts)")
 
 async def get_latest_scan(request):
-    global latest_fullframe
     if latest_fullframe:
         return web.Response(text=latest_fullframe, content_type='application/json')
-    return web.Response(status=204, text='No data yet')
+    return web.Response(status=204, text='No scan yet')
 
 def main():
+    import os
+    if not os.path.isdir("public"):
+        os.mkdir("public")
+
     app = web.Application()
     app.router.add_get('/latest', get_latest_scan)
     app.router.add_static('/', path='public', show_index=True)
@@ -140,9 +138,6 @@ def main():
     loop.run_until_complete(runner.setup())
     loop.run_until_complete(web.TCPSite(runner, '0.0.0.0', HTTP_PORT).start())
 
-    logging.info(f"🌐 HTTP ▶ http://localhost:{HTTP_PORT}")
+    logging.info(f"🌐 HTTP ▶ http://0.0.0.0:{HTTP_PORT}")
     logging.info(f"📡 UDP ▶ listening on {UDP_PORT}")
     loop.run_forever()
-
-if __name__ == '__main__':
-    main()
