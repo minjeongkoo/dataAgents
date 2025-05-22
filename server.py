@@ -68,13 +68,19 @@ def parse_compact(buffer: bytes):
                     if echo_size > 0 and idx + echo_size > len(m):
                         continue
                     raw = struct.unpack_from('<H', m, idx)[0] if echo_size else 0
-                    d = raw * scaling / 1000.0
-                    φ = phi[l]
-                    θ = theta_start[l] + b * ((theta_stop[l] - theta_start[l]) / max(1, num_beams - 1))
+                    d   = raw * scaling / 1000.0
+                    φ   = phi[l]
+                    θ   = theta_start[l] + b * ((theta_stop[l] - theta_start[l]) / max(1, num_beams - 1))
+
+                    x = d * math.cos(φ) * math.cos(θ)
+                    y = d * math.cos(φ) * math.sin(θ)
+                    z = d * math.sin(φ)
+
+                    if x == 0 and y == 0 and z == 0:
+                        continue  # (0,0,0) 제거
+
                     all_pts.append({
-                        'x': d * math.cos(φ) * math.cos(θ),
-                        'y': d * math.cos(φ) * math.sin(θ),
-                        'z': d * math.sin(φ),
+                        'x': x, 'y': y, 'z': z,
                         'layer': l,
                         'channel': ec,
                         'beamIdx': b,
@@ -98,7 +104,6 @@ def clusterize(points):
 class FrameProtocol(asyncio.DatagramProtocol):
     def __init__(self):
         self.buffer = {}
-        self.frame_last_flag = {}
 
     def datagram_received(self, data, addr):
         parsed = parse_compact(data)
