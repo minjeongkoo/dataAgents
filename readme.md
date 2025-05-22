@@ -5,11 +5,20 @@
 * pip
 
 ### 2. 의존성 설치
+```
 pip install aiohttp scikit-learn numpy
+```
 
 ### 3. 실행
+```
 python3 server.py
+```
+또는
+```
+python server.py
+```
 
 ### 4. 접속 안내
+
 * 웹 브라우저: [http://localhost:3000](http://localhost:3000)
 * WebSocket: ws\://localhost:3000/ws
