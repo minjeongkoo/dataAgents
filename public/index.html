@@ -1,9 +1,8 @@
-<!-- public/index.html -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <title>LiDAR 360° Viewer</title>
+  <title>LiDAR 360° Cluster Viewer</title>
   <style>
     body { margin:0; overflow:hidden; }
     canvas { display:block; }
@@ -15,14 +14,10 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.m
 
 const WS_URL = `ws://${location.host}/ws`;
 
-// 센서 설정에 맞춰 수정하세요
-const LAYERS = 16;
-const BEAMS  = 270;
-const ECHOS  = 1;
-const EXPECTED_POINTS = LAYERS * BEAMS * ECHOS;  // 예: 16×270×1 = 4320
-
-let MAX_POINTS = EXPECTED_POINTS * 2; // 혹시 멀티 리턴 대비 여유 2배
-let positions  = new Float32Array(MAX_POINTS * 3);
+let MAX_POINTS = 0;
+let positions  = new Float32Array(0);
+let colors     = new Float32Array(0);
+const clusterColorMap = new Map();
 
 // Three.js 세팅
 const scene    = new THREE.Scene();
@@ -32,25 +27,20 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-// 버퍼 지오메트리 & 포인트 메쉬
 let geometry = new THREE.BufferGeometry();
-geometry.setAttribute(
-  'position',
-  new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
-);
+geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geometry.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
 geometry.setDrawRange(0, 0);
-const material   = new THREE.PointsMaterial({ size: 0.03 });
+const material   = new THREE.PointsMaterial({ size: 0.03, vertexColors: true });
 const pointsMesh = new THREE.Points(geometry, material);
 scene.add(pointsMesh);
 
-// 리사이즈 처리
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
-// WebSocket 연결
 const socket = new WebSocket(WS_URL);
 socket.addEventListener('open',  () => console.log('WS connected'));
 socket.addEventListener('close', () => console.log('WS disconnected'));
@@ -58,36 +48,39 @@ socket.addEventListener('message', ({ data }) => {
   const pts = JSON.parse(data);
   const count = pts.length;
 
-  // → 불완전 스캔 검사  
-  if (count < EXPECTED_POINTS) {
-    console.warn(`Incomplete scan (${count}/${EXPECTED_POINTS}), skipping`);
-    return;
-  }
-
-  // → 필요 시 버퍼 재할당
+  // 배열이 부족하면 재할당
   if (count > MAX_POINTS) {
     MAX_POINTS = count;
     positions  = new Float32Array(MAX_POINTS * 3);
-    geometry.setAttribute(
-      'position',
-      new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage)
-    );
+    colors     = new Float32Array(MAX_POINTS * 3);
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
+    geometry.setAttribute('color',    new THREE.BufferAttribute(colors,    3).setUsage(THREE.DynamicDrawUsage));
   }
 
-  // positions 배열 덮어쓰기
+  // 각 포인트에 위치와 색상 적용
   for (let i = 0; i < count; i++) {
     const p = pts[i];
     positions[3*i]   = p.x;
     positions[3*i+1] = p.y;
     positions[3*i+2] = p.z;
+
+    // cluster_id에 대응하는 색상이 없으면 새로 생성
+    const cid = p.cluster_id;
+    if (!clusterColorMap.has(cid)) {
+      const col = new THREE.Color().setHSL((cid * 0.618033988749895) % 1, 0.7, 0.5);
+      clusterColorMap.set(cid, col);
+    }
+    const col = clusterColorMap.get(cid);
+    colors[3*i]   = col.r;
+    colors[3*i+1] = col.g;
+    colors[3*i+2] = col.b;
   }
 
-  // 그릴 점 개수 업데이트
   geometry.setDrawRange(0, count);
   geometry.attributes.position.needsUpdate = true;
+  geometry.attributes.color.needsUpdate    = true;
 });
 
-// 애니메이션 루프
 (function animate() {
   requestAnimationFrame(animate);
   renderer.render(scene, camera);

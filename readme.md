@@ -5,7 +5,7 @@
 * pip
 
 ### 2. 의존성 설치
-pip3 install aiohttp
+pip install aiohttp scikit-learn numpy
 
 ### 3. 실행
 python3 server.py
