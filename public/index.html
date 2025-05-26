@@ -7,14 +7,37 @@
   <style>
     body { margin: 0; overflow: hidden; }
     canvas { display: block; }
+    #alert {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255, 0, 0, 0.8);
+      color: white;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-family: sans-serif;
+      z-index: 10;
+    }
   </style>
 </head>
 
 <body>
+  <div id="alert" style="display:none;"></div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js"
+    }
+  }
+  </script>
+
   <script type="module">
-    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+    import * as THREE from 'three';
+    import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/controls/OrbitControls.js';
 
     const WS_URL = `ws://${location.host}/ws`;
+    const alertBox = document.getElementById("alert");
 
     let MAX_POINTS = 0;
     let positions = new Float32Array(0);
@@ -26,9 +49,17 @@
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 1000);
     camera.position.set(0, 0, 5);
+
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.screenSpacePanning = false;
+    controls.minDistance = 1;
+    controls.maxDistance = 500;
 
     let geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -58,6 +89,9 @@
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage));
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
       }
+
+      let dangerDetected = false;
+      let dangerText = "";
 
       for (let i = 0; i < count; i++) {
         const p = points[i];
@@ -96,7 +130,8 @@
           arrows.set(cid, arrow);
         }
 
-        if (info.moved) {
+        const moved = Boolean(info.moved);
+        if (moved) {
           const min = new THREE.Vector3(...info.bbox.min);
           const max = new THREE.Vector3(...info.bbox.max);
           const box = new THREE.Box3(min, max);
@@ -104,11 +139,26 @@
           scene.add(boxHelper);
           boxes.set(cid, boxHelper);
         }
+
+        const distToOrigin = origin.length();
+        if (distToOrigin < 0.4) {
+          console.warn(`Collision risk detected: Cluster ${cid} near (0,0,0)`);
+          dangerDetected = true;
+          dangerText += `Cluster ${cid} 충돌 위험!<br>`;
+        }
+      }
+
+      if (dangerDetected) {
+        alertBox.innerHTML = dangerText;
+        alertBox.style.display = "block";
+      } else {
+        alertBox.style.display = "none";
       }
     });
 
     (function animate() {
       requestAnimationFrame(animate);
+      controls.update();
       renderer.render(scene, camera);
     })();
   </script>
