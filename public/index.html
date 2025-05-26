@@ -5,14 +5,8 @@
   <meta charset="UTF-8" />
   <title>LiDAR 360° Cluster Viewer</title>
   <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-    }
-
-    canvas {
-      display: block;
-    }
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
   </style>
 </head>
 
@@ -26,6 +20,8 @@
     let positions = new Float32Array(0);
     let colors = new Float32Array(0);
     const clusterColorMap = new Map();
+    const arrows = new Map();  // 속도 벡터
+    const boxes = new Map();   // 바운딩 박스
 
     // Three.js 세팅
     const scene = new THREE.Scene();
@@ -53,10 +49,10 @@
     socket.addEventListener('open', () => console.log('WS connected'));
     socket.addEventListener('close', () => console.log('WS disconnected'));
     socket.addEventListener('message', ({ data }) => {
-      const pts = JSON.parse(data);
-      const count = pts.length;
+      const { points, clusters } = JSON.parse(data);
+      const count = points.length;
 
-      // 배열이 부족하면 재할당
+      // 포인트 버퍼 재할당
       if (count > MAX_POINTS) {
         MAX_POINTS = count;
         positions = new Float32Array(MAX_POINTS * 3);
@@ -65,21 +61,20 @@
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
       }
 
-      // 각 포인트에 위치와 색상 적용
+      // 점 위치 및 색상 업데이트
       for (let i = 0; i < count; i++) {
-        const p = pts[i];
-        positions[3 * i] = p.x;
+        const p = points[i];
+        positions[3 * i + 0] = p.x;
         positions[3 * i + 1] = p.y;
         positions[3 * i + 2] = p.z;
 
-        // cluster_id에 대응하는 색상이 없으면 새로 생성
         const cid = p.cluster_id;
         if (!clusterColorMap.has(cid)) {
-          const col = new THREE.Color().setHSL((cid * 0.618033988749895) % 1, 0.7, 0.5);
+          const col = new THREE.Color().setHSL((cid * 0.61803) % 1, 0.7, 0.5);
           clusterColorMap.set(cid, col);
         }
         const col = clusterColorMap.get(cid);
-        colors[3 * i] = col.r;
+        colors[3 * i + 0] = col.r;
         colors[3 * i + 1] = col.g;
         colors[3 * i + 2] = col.b;
       }
@@ -87,6 +82,31 @@
       geometry.setDrawRange(0, count);
       geometry.attributes.position.needsUpdate = true;
       geometry.attributes.color.needsUpdate = true;
+
+      // 이전 ArrowHelper 및 Box 제거
+      for (const obj of arrows.values()) scene.remove(obj);
+      for (const obj of boxes.values()) scene.remove(obj);
+      arrows.clear();
+      boxes.clear();
+
+      // 클러스터별 속도 벡터 및 바운딩 박스
+      for (const [cid, info] of Object.entries(clusters)) {
+        const origin = new THREE.Vector3(...info.centroid);
+        const dir = new THREE.Vector3(...info.velocity);
+        const speed = info.speed;
+        if (speed > 0.01) {
+          const arrow = new THREE.ArrowHelper(dir.clone().normalize(), origin, speed, 0xffff00);
+          scene.add(arrow);
+          arrows.set(cid, arrow);
+        }
+
+        const min = new THREE.Vector3(...info.bbox.min);
+        const max = new THREE.Vector3(...info.bbox.max);
+        const box = new THREE.Box3(min, max);
+        const boxHelper = new THREE.Box3Helper(box, 0xffffff);
+        scene.add(boxHelper);
+        boxes.set(cid, boxHelper);
+      }
     });
 
     (function animate() {

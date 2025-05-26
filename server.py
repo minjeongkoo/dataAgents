@@ -1,230 +1,194 @@
 #!/usr/bin/env python3
-import asyncio
-import math
-import struct
-import json
-import logging
+import asyncio, math, struct, json, logging
 from aiohttp import web
 from sklearn.cluster import DBSCAN
 
-UDP_PORT            = 2115
-HTTP_PORT           = 3000
-DBSCAN_EPS          = 0.3    # DBSCAN 반경 (미터)
-DBSCAN_MIN_SAMPLES  = 10     # DBSCAN 최소 샘플
-MAX_MATCH_DIST      = 0.5    # Stable ID 매칭 최대 거리 (미터)
+UDP_PORT, HTTP_PORT = 2115, 3000
+DBSCAN_EPS, DBSCAN_MIN_SAMPLES, MAX_MATCH_DIST = 0.3, 10, 0.5
+FRAME_TIME_GAP_SEC = 0.1  # 추정된 프레임 간 시간 (초)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(message)s',
-    datefmt='%H:%M:%S'
-)
-
+logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
 clients = set()
 
-# Stable ID 글로벌 상태
 next_cluster_id = 0
-prev_centroids  = {}   # {stable_id: (x,y,z)}
+prev_centroids = {}      # {cluster_id: (x,y,z)}
+prev_speeds = {}         # {cluster_id: (vx, vy, vz)}
 
 def assign_stable_ids(raw_clusters):
-    
-    global next_cluster_id, prev_centroids
+    global next_cluster_id, prev_centroids, prev_speeds
 
-    new_centroids = {}
-    assignments   = {}
+    new_centroids, assignments = {}, {}
 
-    # 1) 기존 centroids와 가장 가까운 것 매칭
     for i, rc in enumerate(raw_clusters):
         cx, cy, cz = rc['centroid']
         best_id, best_dist = None, float('inf')
-        for old_id, (ox,oy,oz) in prev_centroids.items():
-            d = math.dist((cx,cy,cz),(ox,oy,oz))
+        for old_id, (ox, oy, oz) in prev_centroids.items():
+            d = math.dist((cx, cy, cz), (ox, oy, oz))
             if d < best_dist:
                 best_dist, best_id = d, old_id
         if best_id is not None and best_dist < MAX_MATCH_DIST:
             assignments[i] = best_id
-            new_centroids[best_id] = (cx,cy,cz)
-
-    # 2) 매칭 안 된 새 클러스터에 새로운 ID 부여
-    for i, rc in enumerate(raw_clusters):
-        if i not in assignments:
+            new_centroids[best_id] = (cx, cy, cz)
+        else:
             assignments[i] = next_cluster_id
-            new_centroids[next_cluster_id] = rc['centroid']
+            new_centroids[next_cluster_id] = (cx, cy, cz)
             next_cluster_id += 1
 
-    # 3) 상태 갱신 (사라진 old_id 자동 제거)
+    cluster_info = {}
+    for i, rc in enumerate(raw_clusters):
+        cid = assignments[i]
+        cx, cy, cz = rc['centroid']
+
+        # 속도 계산
+        vx = vy = vz = 0
+        if cid in prev_centroids:
+            px, py, pz = prev_centroids[cid]
+            vx, vy, vz = [(c - p) / FRAME_TIME_GAP_SEC for c, p in zip((cx, cy, cz), (px, py, pz))]
+        prev_speeds[cid] = (vx, vy, vz)
+
+        # 바운딩 박스
+        xs = [p['x'] for p in rc['pts']]
+        ys = [p['y'] for p in rc['pts']]
+        zs = [p['z'] for p in rc['pts']]
+        bbox = {
+            "min": [min(xs), min(ys), min(zs)],
+            "max": [max(xs), max(ys), max(zs)]
+        }
+
+        cluster_info[cid] = {
+            "centroid": [cx, cy, cz],
+            "velocity": [vx, vy, vz],
+            "speed": math.sqrt(vx**2 + vy**2 + vz**2),
+            "bbox": bbox
+        }
+
     prev_centroids = new_centroids
 
-    # 4) pts 에 cluster_id 부착
-    output = []
+    points = []
     for i, rc in enumerate(raw_clusters):
         cid = assignments[i]
         for p in rc['pts']:
             p['cluster_id'] = cid
-            output.append(p)
-    return output
+            points.append(p)
+
+    return points, cluster_info
 
 def parse_compact(buffer: bytes):
-    # Compact Format 파싱 → frame_number, pts list 반환
-    if len(buffer) < 32: return None
-    if struct.unpack_from('>I', buffer, 0)[0] != 0x02020202: return None
-    if struct.unpack_from('<I', buffer, 4)[0] != 1:          return None
-
-    offset      = 32
-    module_size = struct.unpack_from('<I', buffer, 28)[0]
-    all_pts     = []
-    frame_number= None
+    if len(buffer) < 32 or struct.unpack_from('>I', buffer)[0] != 0x02020202 or struct.unpack_from('<I', buffer, 4)[0] != 1:
+        return None
+    offset, module_size = 32, struct.unpack_from('<I', buffer, 28)[0]
+    all_pts, frame_number = [], None
 
     while module_size > 0 and offset + module_size <= len(buffer):
         m = buffer[offset:offset+module_size]
         frame_number = int.from_bytes(m[8:16], 'little')
-        num_layers   = struct.unpack_from('<I', m, 20)[0]
-        num_beams    = struct.unpack_from('<I', m, 24)[0]
-        num_echos    = struct.unpack_from('<I', m, 28)[0]
-        mo = 32 + num_layers*16
+        num_layers, num_beams, num_echos = struct.unpack_from('<III', m, 20)
+        mo = 32 + num_layers * 16
+        phi = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]; mo += 4 * num_layers
+        theta_start = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]; mo += 4 * num_layers
+        theta_stop = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]; mo += 4 * num_layers
+        scaling, next_module = struct.unpack_from('<fI', m, mo); mo += 8
+        mo += 1  # reserved
+        data_echos, data_beams = m[mo], m[mo+1]; mo += 3
+        echo_size = (2 if data_echos & 1 else 0) + (2 if data_echos & 2 else 0)
+        beam_prop_size = 1 if data_beams & 1 else 0
+        beam_angle_size = 2 if data_beams & 2 else 0
+        beam_size = echo_size * num_echos + beam_prop_size + beam_angle_size
+        data_offset = mo
 
-        # Phi
-        phi = [struct.unpack_from('<f', m, mo+4*i)[0] for i in range(num_layers)]
-        mo += 4 * num_layers
-        # ThetaStart / ThetaStop
-        theta_start = [struct.unpack_from('<f', m, mo+4*i)[0] for i in range(num_layers)]
-        mo += 4 * num_layers
-        theta_stop  = [struct.unpack_from('<f', m, mo+4*i)[0] for i in range(num_layers)]
-        mo += 4 * num_layers
-        # Scaling
-        scaling     = struct.unpack_from('<f', m, mo)[0]; mo += 4
-        # NextModule
-        next_module = struct.unpack_from('<I', m, mo)[0]; mo += 4
-        last_module = (next_module == 0)
-        # Flags
-        mo += 1
-        data_echos  = m[mo]; mo += 1
-        data_beams  = m[mo]; mo += 1
-        mo += 1
-
-        # 크기 계산
-        echo_size       = (2 if (data_echos & 1) else 0) + (2 if (data_echos & 2) else 0)
-        beam_prop_size  = 1 if (data_beams & 1) else 0
-        beam_angle_size = 2 if (data_beams & 2) else 0
-        beam_size       = echo_size * num_echos + beam_prop_size + beam_angle_size
-        data_offset     = mo
-
-        # 포인트 파싱
         for b in range(num_beams):
             for l in range(num_layers):
                 base = data_offset + (b*num_layers + l)*beam_size
                 for ec in range(num_echos):
                     idx = base + ec*echo_size
-                    if echo_size>0 and idx+echo_size>len(m): continue
+                    if echo_size > 0 and idx + echo_size > len(m): continue
                     raw = struct.unpack_from('<H', m, idx)[0] if echo_size else 0
-                    d   = raw*scaling/1000.0
-                    φ   = phi[l]
-                    θ   = theta_start[l] + b*((theta_stop[l]-theta_start[l])/max(1, num_beams-1))
-                    all_pts.append({'x':d*math.cos(φ)*math.cos(θ),
-                                    'y':d*math.cos(φ)*math.sin(θ),
-                                    'z':d*math.sin(φ),
-                                    'theta':θ})
+                    d = raw * scaling / 1000.0
+                    φ, θ = phi[l], theta_start[l] + b*((theta_stop[l]-theta_start[l])/max(1, num_beams-1))
+                    all_pts.append({'x': d*math.cos(φ)*math.cos(θ),
+                                    'y': d*math.cos(φ)*math.sin(θ),
+                                    'z': d*math.sin(φ),
+                                    'theta': θ})
+        offset += module_size
+        module_size = next_module
 
-        offset      += module_size
-        module_size  = next_module
-
-    if frame_number is None:
-        return None
-    return frame_number, all_pts
+    return (frame_number, all_pts) if frame_number is not None else None
 
 def process_frame(pts):
-    # 1) 잡음 제거(0,0,0) → 2) DBSCAN → 3) Stable ID 부착 → flat pts list 리턴
-    # 1) (0,0,0) 포인트 제거
     pts = [p for p in pts if not (p['x']==0 and p['y']==0 and p['z']==0)]
-    if not pts:
-        return []
-
-    # 2) DBSCAN 클러스터링
+    if not pts: return [], {}
     coords = [[p['x'], p['y'], p['z']] for p in pts]
-    db     = DBSCAN(eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES).fit(coords)
-    labels = db.labels_
+    labels = DBSCAN(eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES).fit(coords).labels_
 
-    # 3) 클러스터별 pts 묶고 centroids 계산
     clusters = {}
     for p, lbl in zip(pts, labels):
         clusters.setdefault(lbl, []).append(p)
 
     raw_clusters = []
-    # noise(-1) → 바로 cluster_id=-1 처리
     noise_pts = clusters.pop(-1, [])
-    for p in noise_pts:
-        p['cluster_id'] = -1
+    for p in noise_pts: p['cluster_id'] = -1
 
-    # 나머지만 stable ID 할당 대상
     for lbl, cpts in clusters.items():
         cx = sum(p['x'] for p in cpts)/len(cpts)
         cy = sum(p['y'] for p in cpts)/len(cpts)
         cz = sum(p['z'] for p in cpts)/len(cpts)
-        raw_clusters.append({'pts': cpts, 'centroid': (cx,cy,cz)})
+        raw_clusters.append({'pts': cpts, 'centroid': (cx, cy, cz)})
 
-    stable = []
-    stable.extend(noise_pts)
-    stable.extend(assign_stable_ids(raw_clusters))
-    return stable
+    stable_pts, cluster_info = assign_stable_ids(raw_clusters)
+    stable_pts.extend(noise_pts)
+    return stable_pts, cluster_info
 
 class FrameProtocol(asyncio.DatagramProtocol):
-    """FrameNumber 가 바뀔 때마다 360° 전체 스캔 처리"""
     def __init__(self):
         self.last_frame = None
-        self.accum_pts  = []
+        self.accum_pts = []
 
     def datagram_received(self, data, addr):
         parsed = parse_compact(data)
-        if not parsed:
-            return
+        if not parsed: return
         frame_num, pts = parsed
 
         if self.last_frame is None:
             self.last_frame = frame_num
 
-        # 프레임 번호가 바뀌면 이전 쌓인 pts 전체를 클러스터+Stable ID 처리 후 전송
         if frame_num != self.last_frame:
-            stable_pts = process_frame(self.accum_pts)
-            msg = json.dumps(stable_pts)
+            stable_pts, cluster_info = process_frame(self.accum_pts)
+            msg = json.dumps({
+                "points": stable_pts,
+                "clusters": cluster_info
+            })
             for ws in list(clients):
                 if not ws.closed:
                     asyncio.create_task(ws.send_str(msg))
-            logging.info(f"✅ Sent frame {self.last_frame} → {len(stable_pts)} pts (clusters)")
-            self.accum_pts  = []
+            logging.info(f"Sent frame {self.last_frame} → {len(stable_pts)} pts, {len(cluster_info)} clusters")
+            self.accum_pts = []
             self.last_frame = frame_num
-
         else:
             self.accum_pts.extend(pts)
-
 
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     clients.add(ws)
-    logging.info("🟢 WS client connected")
-    async for _ in ws:
-        pass
+    logging.info("WS client connected")
+    async for _ in ws: pass
     clients.discard(ws)
-    logging.info("🔴 WS client disconnected")
+    logging.info("WS client disconnected")
     return ws
-
 
 def main():
     app = web.Application()
     app.router.add_get('/ws', websocket_handler)
     app.router.add_static('/', path='public', show_index=True)
 
-    loop   = asyncio.get_event_loop()
-    # UDP 바인딩
-    coro1  = loop.create_datagram_endpoint(lambda: FrameProtocol(),
-                                           local_addr=('0.0.0.0', UDP_PORT))
-    loop.run_until_complete(coro1)
-    # HTTP 서버
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(loop.create_datagram_endpoint(lambda: FrameProtocol(), local_addr=('0.0.0.0', UDP_PORT)))
     runner = web.AppRunner(app)
     loop.run_until_complete(runner.setup())
     loop.run_until_complete(web.TCPSite(runner, '0.0.0.0', HTTP_PORT).start())
 
-    logging.info(f"🌐 HTTP http://0.0.0.0:{HTTP_PORT}")
-    logging.info(f"📡 UDP listening on port {UDP_PORT}")
+    logging.info(f"HTTP http://0.0.0.0:{HTTP_PORT}")
+    logging.info(f"UDP listening on {UDP_PORT}")
     loop.run_forever()
 
 if __name__ == '__main__':
