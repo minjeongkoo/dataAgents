@@ -5,7 +5,8 @@ from sklearn.cluster import DBSCAN
 
 UDP_PORT, HTTP_PORT = 2115, 3000
 DBSCAN_EPS, DBSCAN_MIN_SAMPLES, MAX_MATCH_DIST = 0.3, 10, 0.5
-FRAME_TIME_GAP_SEC = 0.1  # 추정된 프레임 간 시간 (초)
+FRAME_TIME_GAP_SEC = 0.1
+MAX_CLUSTER_ID = 10000
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
 clients = set()
@@ -13,40 +14,57 @@ clients = set()
 next_cluster_id = 0
 prev_centroids = {}      # {cluster_id: (x,y,z)}
 prev_speeds = {}         # {cluster_id: (vx, vy, vz)}
+reusable_ids = set()
+
+def get_next_cluster_id():
+    global next_cluster_id, reusable_ids
+    if reusable_ids:
+        return reusable_ids.pop()
+    cid = next_cluster_id
+    next_cluster_id = (next_cluster_id + 1) % MAX_CLUSTER_ID
+    return cid
 
 def assign_stable_ids(raw_clusters):
-    global next_cluster_id, prev_centroids, prev_speeds
+    global next_cluster_id, prev_centroids, prev_speeds, reusable_ids
 
     new_centroids, assignments = {}, {}
+    used_ids = set()
 
     for i, rc in enumerate(raw_clusters):
         cx, cy, cz = rc['centroid']
         best_id, best_dist = None, float('inf')
         for old_id, (ox, oy, oz) in prev_centroids.items():
             d = math.dist((cx, cy, cz), (ox, oy, oz))
-            if d < best_dist:
+            if d < best_dist and old_id not in used_ids:
                 best_dist, best_id = d, old_id
         if best_id is not None and best_dist < MAX_MATCH_DIST:
             assignments[i] = best_id
+            used_ids.add(best_id)
             new_centroids[best_id] = (cx, cy, cz)
         else:
-            assignments[i] = next_cluster_id
-            new_centroids[next_cluster_id] = (cx, cy, cz)
-            next_cluster_id += 1
+            cid = get_next_cluster_id()
+            assignments[i] = cid
+            used_ids.add(cid)
+            new_centroids[cid] = (cx, cy, cz)
+
+    reusable_ids = set(prev_centroids.keys()) - set(new_centroids.keys())
 
     cluster_info = {}
     for i, rc in enumerate(raw_clusters):
         cid = assignments[i]
         cx, cy, cz = rc['centroid']
 
-        # 속도 계산
         vx = vy = vz = 0
+        moved = False
         if cid in prev_centroids:
             px, py, pz = prev_centroids[cid]
             vx, vy, vz = [(c - p) / FRAME_TIME_GAP_SEC for c, p in zip((cx, cy, cz), (px, py, pz))]
+            moved = math.dist((cx, cy, cz), (px, py, pz)) > 0.1  # 10cm 이상 이동
+        else:
+            moved = True
+
         prev_speeds[cid] = (vx, vy, vz)
 
-        # 바운딩 박스
         xs = [p['x'] for p in rc['pts']]
         ys = [p['y'] for p in rc['pts']]
         zs = [p['z'] for p in rc['pts']]
@@ -59,7 +77,8 @@ def assign_stable_ids(raw_clusters):
             "centroid": [cx, cy, cz],
             "velocity": [vx, vy, vz],
             "speed": math.sqrt(vx**2 + vy**2 + vz**2),
-            "bbox": bbox
+            "bbox": bbox,
+            "moved": moved
         }
 
     prev_centroids = new_centroids
@@ -88,7 +107,7 @@ def parse_compact(buffer: bytes):
         theta_start = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]; mo += 4 * num_layers
         theta_stop = [struct.unpack_from('<f', m, mo + 4*i)[0] for i in range(num_layers)]; mo += 4 * num_layers
         scaling, next_module = struct.unpack_from('<fI', m, mo); mo += 8
-        mo += 1  # reserved
+        mo += 1
         data_echos, data_beams = m[mo], m[mo+1]; mo += 3
         echo_size = (2 if data_echos & 1 else 0) + (2 if data_echos & 2 else 0)
         beam_prop_size = 1 if data_beams & 1 else 0
@@ -104,10 +123,10 @@ def parse_compact(buffer: bytes):
                     if echo_size > 0 and idx + echo_size > len(m): continue
                     raw = struct.unpack_from('<H', m, idx)[0] if echo_size else 0
                     d = raw * scaling / 1000.0
-                    φ, θ = phi[l], theta_start[l] + b*((theta_stop[l]-theta_start[l])/max(1, num_beams-1))
-                    all_pts.append({'x': d*math.cos(φ)*math.cos(θ),
-                                    'y': d*math.cos(φ)*math.sin(θ),
-                                    'z': d*math.sin(φ),
+                    ϕ, θ = phi[l], theta_start[l] + b*((theta_stop[l]-theta_start[l])/max(1, num_beams-1))
+                    all_pts.append({'x': d*math.cos(ϕ)*math.cos(θ),
+                                    'y': d*math.cos(ϕ)*math.sin(θ),
+                                    'z': d*math.sin(ϕ),
                                     'theta': θ})
         offset += module_size
         module_size = next_module
@@ -153,10 +172,7 @@ class FrameProtocol(asyncio.DatagramProtocol):
 
         if frame_num != self.last_frame:
             stable_pts, cluster_info = process_frame(self.accum_pts)
-            msg = json.dumps({
-                "points": stable_pts,
-                "clusters": cluster_info
-            })
+            msg = json.dumps({"points": stable_pts, "clusters": cluster_info})
             for ws in list(clients):
                 if not ws.closed:
                     asyncio.create_task(ws.send_str(msg))
