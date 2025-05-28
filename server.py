@@ -3,16 +3,17 @@ import asyncio, math, struct, json, logging
 from aiohttp import web
 from sklearn.cluster import DBSCAN
 from typing import Dict, Tuple, List, Set, Any
+from scipy.spatial import KDTree
 
 UDP_PORT: int = 2115
 HTTP_PORT: int = 3000
 
-DBSCAN_EPS: float = 0.25 # DBSCAN에서 한 포인트가 이웃으로 간주되는 거리 (m)
-DBSCAN_MIN_SAMPLES: int = 15 # 클러스터가 되기 위한 최소 이웃 수
-MAX_MATCH_DIST: float = 0.4 # 클러스터 매칭 거리 (m)
-FRAME_TIME_GAP_SEC: float = 0.3 # 프레임 간 시간 간격 (초)
-MAX_CLUSTER_ID: int = 10000 # 클러스터 ID의 최대치
-CLUSTER_RADIUS: float = 3.0 # 클러스터링 반경 (m)
+DBSCAN_EPS: float = 0.25
+DBSCAN_MIN_SAMPLES: int = 15
+MAX_MATCH_DIST: float = 0.4
+FRAME_TIME_GAP_SEC: float = 0.3
+MAX_CLUSTER_ID: int = 10000
+CLUSTER_RADIUS: float = 3.0
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
 clients: Set[web.WebSocketResponse] = set()
@@ -25,41 +26,46 @@ reusable_ids: Set[int] = set()
 def get_next_cluster_id() -> int:
     global next_cluster_id, reusable_ids
     if reusable_ids:
-        return reusable_ids.pop()
+        return min(reusable_ids)
+    # 사용되지 않은 가장 작은 ID를 찾아 할당
+    for cid in range(MAX_CLUSTER_ID):
+        if cid not in prev_centroids:
+            return cid
+    # 모든 ID가 사용 중이면 순환 방식으로 fallback
     cid: int = next_cluster_id
     next_cluster_id = (next_cluster_id + 1) % MAX_CLUSTER_ID
     return cid
 
-def assign_stable_ids(raw_clusters: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
+def assign_stable_ids(raw_clusters: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]], List[str]]:
     global next_cluster_id, prev_centroids, prev_speeds, reusable_ids
 
-    new_centroids: Dict[int, Tuple[float, float, float]] = {}
     assignments: Dict[int, int] = {}
     used_ids: Set[int] = set()
-
-    for i, rc in enumerate(raw_clusters):
-        cx, cy, cz = rc['centroid']
-        best_id, best_dist = None, float('inf')
-        for old_id, (ox, oy, oz) in prev_centroids.items():
-            d = math.dist((cx, cy, cz), (ox, oy, oz))
-            if d < best_dist and old_id not in used_ids:
-                best_dist, best_id = d, old_id
-        if best_id is not None and best_dist < MAX_MATCH_DIST:
-            assignments[i] = best_id
-            used_ids.add(best_id)
-            new_centroids[best_id] = (cx, cy, cz)
-        else:
-            cid: int = get_next_cluster_id()
-            assignments[i] = cid
-            used_ids.add(cid)
-            new_centroids[cid] = (cx, cy, cz)
-
-    reusable_ids = set(prev_centroids.keys()) - set(new_centroids.keys())
-
+    new_centroids: Dict[int, Tuple[float, float, float]] = {}
+    collision_alerts: List[str] = []
     cluster_info: Dict[int, Dict[str, Any]] = {}
+
+    prev_ids = list(prev_centroids.keys())
+    prev_coords = [prev_centroids[pid] for pid in prev_ids]
+    tree = KDTree(prev_coords) if prev_coords else None
+
     for i, rc in enumerate(raw_clusters):
-        cid = assignments[i]
         cx, cy, cz = rc['centroid']
+        cid = None
+
+        if tree:
+            dist, idx = tree.query([cx, cy, cz], distance_upper_bound=MAX_MATCH_DIST)
+            if idx < len(prev_ids):
+                matched_id = prev_ids[idx]
+                if matched_id not in used_ids:
+                    cid = matched_id
+                    used_ids.add(cid)
+
+        if cid is None:
+            cid = get_next_cluster_id()
+
+        assignments[i] = cid
+        new_centroids[cid] = (cx, cy, cz)
 
         vx = vy = vz = 0.0
         moved = False
@@ -80,6 +86,11 @@ def assign_stable_ids(raw_clusters: List[Dict[str, Any]]) -> Tuple[List[Dict[str
             "max": [max(xs), max(ys), max(zs)]
         }
 
+        dist_to_origin = math.sqrt(cx**2 + cy**2 + cz**2)
+        if dist_to_origin < 0.5:
+            msg = (f"Cluster {cid} 위험! 원점 거리 {dist_to_origin:.2f}m, 속도=({vx:.2f},{vy:.2f},{vz:.2f})")
+            collision_alerts.append(msg)
+
         cluster_info[cid] = {
             "centroid": [cx, cy, cz],
             "velocity": [vx, vy, vz],
@@ -89,6 +100,8 @@ def assign_stable_ids(raw_clusters: List[Dict[str, Any]]) -> Tuple[List[Dict[str
             "count": len(rc['pts'])
         }
 
+    reusable_ids.clear()
+    reusable_ids.update(set(prev_centroids.keys()) - set(new_centroids.keys()))
     prev_centroids = new_centroids
 
     points: List[Dict[str, Any]] = []
@@ -98,7 +111,7 @@ def assign_stable_ids(raw_clusters: List[Dict[str, Any]]) -> Tuple[List[Dict[str
             p['cluster_id'] = cid
             points.append(p)
 
-    return points, cluster_info
+    return points, cluster_info, collision_alerts
 
 def parse_compact(buffer: bytes) -> Tuple[int, List[Dict[str, float]]] | None:
     if len(buffer) < 32 or struct.unpack_from('>I', buffer)[0] != 0x02020202 or struct.unpack_from('<I', buffer, 4)[0] != 1:
@@ -146,13 +159,11 @@ def parse_compact(buffer: bytes) -> Tuple[int, List[Dict[str, float]]] | None:
 
     return (frame_number, all_pts) if frame_number is not None else None
 
-def process_frame(pts: List[Dict[str, float]]) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
-    # 0,0,0 제거
+def process_frame(pts: List[Dict[str, float]]) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]], List[str]]:
     pts = [p for p in pts if not (p['x'] == 0 and p['y'] == 0 and p['z'] == 0)]
     if not pts:
-        return [], {}
+        return [], {}, []
 
-    # 클러스터링 대상만 반경 3m 이내로 필터
     cluster_targets = [p for p in pts if math.sqrt(p['x']**2 + p['y']**2 + p['z']**2) <= CLUSTER_RADIUS]
     coords = [[p['x'], p['y'], p['z']] for p in cluster_targets]
     labels = DBSCAN(eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES).fit(coords).labels_
@@ -170,19 +181,16 @@ def process_frame(pts: List[Dict[str, float]]) -> Tuple[List[Dict[str, Any]], Di
         cz = sum(p['z'] for p in cpts) / len(cpts)
         raw_clusters.append({'pts': cpts, 'centroid': (cx, cy, cz)})
 
-    # stable_pts에는 cluster_id가 부여됨
-    stable_pts, cluster_info = assign_stable_ids(raw_clusters)
+    stable_pts, cluster_info, alerts = assign_stable_ids(raw_clusters)
 
-    # noise 처리: cluster_id = -1 추가
     for p in noise_pts:
         p['cluster_id'] = -1
 
-    # 3m 밖에 있는 점은 cluster_id를 부여하지 않음
     clustered_ids = {id(p) for p in stable_pts}
     noise_ids = {id(p) for p in noise_pts}
     unprocessed_pts = [p for p in pts if id(p) not in clustered_ids and id(p) not in noise_ids]
 
-    return stable_pts + noise_pts + unprocessed_pts, cluster_info
+    return stable_pts + noise_pts + unprocessed_pts, cluster_info, alerts
 
 class FrameProtocol(asyncio.DatagramProtocol):
     def __init__(self):
@@ -199,12 +207,12 @@ class FrameProtocol(asyncio.DatagramProtocol):
             self.last_frame = frame_num
 
         if frame_num != self.last_frame:
-            stable_pts, cluster_info = process_frame(self.accum_pts)
-            msg = json.dumps({"points": stable_pts, "clusters": cluster_info})
+            stable_pts, cluster_info, alerts = process_frame(self.accum_pts)
+            msg = json.dumps({"points": stable_pts, "clusters": cluster_info, "alerts": alerts})
             for ws in list(clients):
                 if not ws.closed:
                     asyncio.create_task(ws.send_str(msg))
-            logging.info(f"Sent frame {self.last_frame} → {len(stable_pts)} pts, {len(cluster_info)} clusters")
+            logging.info(f"Sent frame {self.last_frame} → {len(stable_pts)} pts, {len(cluster_info)} clusters, {len(alerts)} alerts")
             self.accum_pts = []
             self.last_frame = frame_num
         else:
