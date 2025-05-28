@@ -13,27 +13,124 @@
     canvas {
       display: block;
     }
+
+    .label {
+      font-family: sans-serif;
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.2);
+      color: white;
+      width: 120px;
+      padding: 2px 4px;
+      border-radius: 2px;
+      white-space: nowrap;
+    }
+
+    #rotation-controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      font-family: sans-serif;
+      padding: 10px;
+      border-radius: 4px;
+      z-index: 10;
+    }
+
+    #rotation-controls button {
+      margin: 2px;
+    }
+
+    #cluster-table {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      max-height: 300px;
+      overflow-y: auto;
+      background: rgba(0,0,0,0.7);
+      color: white;
+      font-family: sans-serif;
+      font-size: 12px;
+      padding: 10px;
+      border-radius: 4px;
+      z-index: 10;
+    }
+
+    #cluster-table table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+
+    #cluster-table th, #cluster-table td {
+      width: 100px;
+      border: 1px solid #888;
+      padding: 4px 6px;
+    }
+
+    #cluster-table th {
+      background: rgba(255,255,255,0.1);
+    }
   </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js",
+      "three/addons/controls/OrbitControls.js": "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/controls/OrbitControls.js",
+      "three/addons/renderers/CSS2DRenderer.js": "https://cdn.jsdelivr.net/npm/three@0.152.2/examples/jsm/renderers/CSS2DRenderer.js"
+    }
+  }
+  </script>
 </head>
 
 <body>
+  <div id="rotation-controls">
+    <button id="rotateRight">↻ 90°</button>
+    <button id="rotateLeft">↺ -90°</button>
+  </div>
+  <div id="cluster-table">
+    <table>
+      <thead><tr><th>ID</th><th>Speed</th><th>Count</th></tr></thead>
+      <tbody id="cluster-tbody"></tbody>
+    </table>
+  </div>
+
   <script type="module">
-    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
     const WS_URL = `ws://${location.host}/ws`;
+    const tbody = document.getElementById("cluster-tbody");
 
     let MAX_POINTS = 0;
     let positions = new Float32Array(0);
     let colors = new Float32Array(0);
     const clusterColorMap = new Map();
+    const arrows = new Map();
+    const boxes = new Map();
+    const labels = new Map();
 
-    // Three.js 세팅
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 1000);
     camera.position.set(0, 0, 5);
+
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth, innerHeight);
     document.body.appendChild(renderer.domElement);
+
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(innerWidth, innerHeight);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0px';
+    labelRenderer.domElement.style.pointerEvents = 'none';
+    document.body.appendChild(labelRenderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.screenSpacePanning = false;
+    controls.minDistance = 1;
+    controls.maxDistance = 500;
 
     let geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -43,20 +140,24 @@
     const pointsMesh = new THREE.Points(geometry, material);
     scene.add(pointsMesh);
 
+    const rootGroup = new THREE.Group();
+    scene.add(rootGroup);
+
     window.addEventListener('resize', () => {
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
+      labelRenderer.setSize(innerWidth, innerHeight);
     });
 
     const socket = new WebSocket(WS_URL);
     socket.addEventListener('open', () => console.log('WS connected'));
     socket.addEventListener('close', () => console.log('WS disconnected'));
     socket.addEventListener('message', ({ data }) => {
-      const pts = JSON.parse(data);
-      const count = pts.length;
+      const { points, clusters } = JSON.parse(data);
+      const count = points.length;
+      tbody.innerHTML = '';
 
-      // 배열이 부족하면 재할당
       if (count > MAX_POINTS) {
         MAX_POINTS = count;
         positions = new Float32Array(MAX_POINTS * 3);
@@ -65,35 +166,94 @@
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
       }
 
-      // 각 포인트에 위치와 색상 적용
       for (let i = 0; i < count; i++) {
-        const p = pts[i];
-        positions[3 * i] = p.x;
+        const p = points[i];
+        positions[3 * i + 0] = p.x;
         positions[3 * i + 1] = p.y;
         positions[3 * i + 2] = p.z;
 
-        // cluster_id에 대응하는 색상이 없으면 새로 생성
         const cid = p.cluster_id;
-        if (!clusterColorMap.has(cid)) {
-          const col = new THREE.Color().setHSL((cid * 0.618033988749895) % 1, 0.7, 0.5);
-          clusterColorMap.set(cid, col);
+        if (cid === -1) {
+          colors[3 * i + 0] = 0.5;
+          colors[3 * i + 1] = 0.5;
+          colors[3 * i + 2] = 0.5;
+        } else {
+          if (!clusterColorMap.has(cid)) {
+            const col = new THREE.Color().setHSL((cid * 0.61803) % 1, 0.7, 0.5);
+            clusterColorMap.set(cid, col);
+          }
+          const col = clusterColorMap.get(cid);
+          colors[3 * i + 0] = col.r;
+          colors[3 * i + 1] = col.g;
+          colors[3 * i + 2] = col.b;
         }
-        const col = clusterColorMap.get(cid);
-        colors[3 * i] = col.r;
-        colors[3 * i + 1] = col.g;
-        colors[3 * i + 2] = col.b;
       }
 
       geometry.setDrawRange(0, count);
       geometry.attributes.position.needsUpdate = true;
       geometry.attributes.color.needsUpdate = true;
+
+      for (const obj of arrows.values()) scene.remove(obj);
+      for (const obj of boxes.values()) scene.remove(obj);
+      for (const obj of labels.values()) scene.remove(obj);
+      arrows.clear();
+      boxes.clear();
+      labels.clear();
+
+      for (const [cid, info] of Object.entries(clusters)) {
+        const origin = new THREE.Vector3(...info.centroid);
+        const dir = new THREE.Vector3(...info.velocity);
+        const speed = info.speed;
+
+        if (speed > 0.01) {
+          const arrow = new THREE.ArrowHelper(dir.clone().normalize(), origin, speed, 0xffff00);
+          scene.add(arrow);
+          arrows.set(cid, arrow);
+        }
+
+        if (info.moved) {
+          const min = new THREE.Vector3(...info.bbox.min);
+          const max = new THREE.Vector3(...info.bbox.max);
+          const box = new THREE.Box3(min, max);
+          const boxHelper = new THREE.Box3Helper(box, 0xffffff);
+          scene.add(boxHelper);
+          boxes.set(cid, boxHelper);
+        }
+
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'label';
+        labelDiv.innerHTML = `ID: ${cid}<br>Count: ${info.count}<br>Speed: ${speed.toFixed(2)}`;
+        const label = new CSS2DObject(labelDiv);
+        label.position.copy(origin);
+        scene.add(label);
+        labels.set(cid, label);
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${cid}</td><td>${speed.toFixed(2)}</td><td>${info.count}</td>`;
+        tbody.appendChild(tr);
+      }
     });
+
+    function rotateScene(degrees) {
+      const radians = THREE.MathUtils.degToRad(degrees);
+      rootGroup.rotation.z += radians;
+      localStorage.setItem('viewerRotationZ', rootGroup.rotation.z.toString());
+    }
+
+    document.getElementById("rotateRight").addEventListener("click", () => rotateScene(90));
+    document.getElementById("rotateLeft").addEventListener("click", () => rotateScene(-90));
+
+    const savedRotation = parseFloat(localStorage.getItem('viewerRotationZ'));
+    if (!isNaN(savedRotation)) {
+      rootGroup.rotation.z = savedRotation;
+    }
 
     (function animate() {
       requestAnimationFrame(animate);
+      controls.update();
       renderer.render(scene, camera);
+      labelRenderer.render(scene, camera);
     })();
   </script>
 </body>
-
 </html>
