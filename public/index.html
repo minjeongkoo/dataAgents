@@ -25,18 +25,6 @@
       white-space: nowrap;
     }
 
-    #alert {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      background: rgba(255, 0, 0, 0.8);
-      color: white;
-      padding: 8px 12px;
-      border-radius: 4px;
-      font-family: sans-serif;
-      z-index: 10;
-    }
-
     #rotation-controls {
       position: absolute;
       top: 10px;
@@ -95,14 +83,13 @@
 </head>
 
 <body>
-  <div id="alert" style="display:none;"></div>
   <div id="rotation-controls">
     <button id="rotateRight">↻ 90°</button>
     <button id="rotateLeft">↺ -90°</button>
   </div>
   <div id="cluster-table">
     <table>
-      <thead><tr><th>ID</th><th>Speed</th><th>Direction</th><th>Count</th></tr></thead>
+      <thead><tr><th>ID</th><th>Speed</th><th>Count</th></tr></thead>
       <tbody id="cluster-tbody"></tbody>
     </table>
   </div>
@@ -113,7 +100,6 @@
     import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
     const WS_URL = `ws://${location.host}/ws`;
-    const alertBox = document.getElementById("alert");
     const tbody = document.getElementById("cluster-tbody");
 
     let MAX_POINTS = 0;
@@ -180,9 +166,6 @@
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3).setUsage(THREE.DynamicDrawUsage));
       }
 
-      let dangerDetected = false;
-      let dangerText = "";
-
       for (let i = 0; i < count; i++) {
         const p = points[i];
         positions[3 * i + 0] = p.x;
@@ -239,28 +222,15 @@
 
         const labelDiv = document.createElement('div');
         labelDiv.className = 'label';
-        labelDiv.innerHTML = `ID: ${cid}<br>Count: ${info.count}<br>Speed: ${speed.toFixed(2)}<br>Dir: (${dir.x.toFixed(2)}, ${dir.y.toFixed(2)}, ${dir.z.toFixed(2)})`;
+        labelDiv.innerHTML = `ID: ${cid}<br>Count: ${info.count}<br>Speed: ${speed.toFixed(2)}`;
         const label = new CSS2DObject(labelDiv);
         label.position.copy(origin);
         scene.add(label);
         labels.set(cid, label);
 
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${cid}</td><td>${speed.toFixed(2)}</td><td>(${dir.x.toFixed(1)}, ${dir.y.toFixed(1)}, ${dir.z.toFixed(1)})</td><td>${info.count}</td>`;
+        tr.innerHTML = `<td>${cid}</td><td>${speed.toFixed(2)}</td><td>${info.count}</td>`;
         tbody.appendChild(tr);
-
-        if (origin.length() < 0.4) {
-          console.warn(`Collision risk detected: Cluster ${cid} near (0,0,0)`);
-          dangerDetected = true;
-          dangerText += `Cluster ${cid} 축률 위험!<br>`;
-        }
-      }
-
-      if (dangerDetected) {
-        alertBox.innerHTML = dangerText;
-        alertBox.style.display = "block";
-      } else {
-        alertBox.style.display = "none";
       }
     });
 
@@ -286,5 +256,4 @@
     })();
   </script>
 </body>
-
 </html>
