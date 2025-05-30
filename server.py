@@ -8,12 +8,38 @@ from scipy.spatial import KDTree
 UDP_PORT: int = 2115
 HTTP_PORT: int = 3000
 
-DBSCAN_EPS: float = 0.25
-DBSCAN_MIN_SAMPLES: int = 20
-MAX_MATCH_DIST: float = 0.4
-FRAME_TIME_GAP_SEC: float = 0.3
-MAX_CLUSTER_ID: int = 10000
-CLUSTER_RADIUS: float = 3.0
+DBSCAN_EPS: float = 0.25 # 클러스터 밀도 기준 거리
+DBSCAN_MIN_SAMPLES: int = 20 # 클러스터 최소 포인트 수
+MAX_MATCH_DIST: float = 0.4 # 이전 클러스터와 매칭 거리
+FRAME_TIME_GAP_SEC: float = 0.3 # 프레임 간격
+MAX_CLUSTER_ID: int = 10000 # 클러스터 ID 최대값
+
+
+# 클러스터링 범위 제한
+USE_CONE_SHAPE: bool = True  # True면 원뿔, False면 구 형태
+CLUSTER_RADIUS: float = 6.0 # 클러스터 반경
+ANGLE_TOLERANCE_DEG: float = 20.0 # 원뿔 허용 각도
+ANGLE_TOLERANCE:float = math.radians(ANGLE_TOLERANCE_DEG)  # 퍼짐 각도 (반지름 방향 폭 조절)
+CONICAL_CENTER_THETA = 0.0  # 원뿔 중심 각도 (rad)
+CONICAL_CENTER_PHI = 0.0    # 원뿔 중심 각도 (rad)
+
+def is_within_cone(p):
+    d = math.sqrt(p['x']**2 + p['y']**2 + p['z']**2)
+    if d > CLUSTER_RADIUS or d == 0:
+        return False
+
+    # 포인트 벡터 (정규화)
+    vx, vy, vz = p['x']/d, p['y']/d, p['z']/d
+
+    # 원뿔 축 방향 단위 벡터
+    dx = math.cos(CONICAL_CENTER_PHI) * math.cos(CONICAL_CENTER_THETA)
+    dy = math.cos(CONICAL_CENTER_PHI) * math.sin(CONICAL_CENTER_THETA)
+    dz = math.sin(CONICAL_CENTER_PHI)
+
+    dot = vx*dx + vy*dy + vz*dz
+    angle = math.acos(max(min(dot, 1.0), -1.0))  # 각도 (라디안)
+
+    return angle < ANGLE_TOLERANCE
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s', datefmt='%H:%M:%S')
 clients: Set[web.WebSocketResponse] = set()
@@ -164,7 +190,17 @@ def process_frame(pts: List[Dict[str, float]]) -> Tuple[List[Dict[str, Any]], Di
     if not pts:
         return [], {}, []
 
-    cluster_targets = [p for p in pts if math.sqrt(p['x']**2 + p['y']**2 + p['z']**2) <= CLUSTER_RADIUS]
+    # 클러스터링 대상 포인트 선택
+    if USE_CONE_SHAPE:
+        # 원뿔
+        cluster_targets = [p for p in pts if is_within_cone(p)]
+    else:
+        # 단순 반경으로 계산 (구)
+        cluster_targets = [p for p in pts if math.sqrt(p['x']**2 + p['y']**2 + p['z']**2) <= CLUSTER_RADIUS]
+        
+    if not cluster_targets:
+        return [], {}, []
+
     coords = [[p['x'], p['y'], p['z']] for p in cluster_targets]
     labels = DBSCAN(eps=DBSCAN_EPS, min_samples=DBSCAN_MIN_SAMPLES).fit(coords).labels_
 
