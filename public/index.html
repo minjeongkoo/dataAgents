@@ -19,7 +19,7 @@
       font-size: 12px;
       background: rgba(0, 0, 0, 0.2);
       color: white;
-      width: 120px;
+      width: 140px;
       padding: 2px 4px;
       border-radius: 2px;
       white-space: nowrap;
@@ -47,7 +47,7 @@
       left: 16px;
       max-height: 300px;
       overflow-y: auto;
-      background: rgba(0,0,0,0.7);
+      background: rgba(0, 0, 0, 0.7);
       color: white;
       font-family: sans-serif;
       font-size: 12px;
@@ -61,14 +61,15 @@
       width: 100%;
     }
 
-    #cluster-table th, #cluster-table td {
+    #cluster-table th,
+    #cluster-table td {
       width: 100px;
       border: 1px solid #888;
       padding: 4px 6px;
     }
 
     #cluster-table th {
-      background: rgba(255,255,255,0.1);
+      background: rgba(255, 255, 255, 0.1);
     }
   </style>
   <script type="importmap">
@@ -86,10 +87,20 @@
   <div id="rotation-controls">
     <button id="rotateRight">↻ 90°</button>
     <button id="rotateLeft">↺ -90°</button>
+    <button id="rotateZPos">+Z Axis</button>
+    <button id="rotateZNeg">-Z Axis</button>
+    <button id="toggleCamera">투시 ON/OFF</button>
   </div>
   <div id="cluster-table">
     <table>
-      <thead><tr><th>ID</th><th>Speed</th><th>Count</th></tr></thead>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Speed</th>
+          <th>Count</th>
+          <th>Dist</th>
+        </tr>
+      </thead>
       <tbody id="cluster-tbody"></tbody>
     </table>
   </div>
@@ -111,8 +122,24 @@
     const labels = new Map();
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 1000);
-    camera.position.set(0, 0, 5);
+
+    // 카메라 선언
+    let isPerspective = true;
+    let currentCamera;
+    const aspect = innerWidth / innerHeight;
+
+    const perspCamera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
+    perspCamera.position.set(0, 0, 5);
+
+    const orthoSize = 5;
+    const orthoCamera = new THREE.OrthographicCamera(
+      -orthoSize * aspect, orthoSize * aspect,
+      orthoSize, -orthoSize,
+      0.1, 1000
+    );
+    orthoCamera.position.set(0, 0, 5);
+
+    currentCamera = perspCamera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(innerWidth, innerHeight);
@@ -125,27 +152,36 @@
     labelRenderer.domElement.style.pointerEvents = 'none';
     document.body.appendChild(labelRenderer.domElement);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
+    let controls = new OrbitControls(currentCamera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.screenSpacePanning = false;
     controls.minDistance = 1;
     controls.maxDistance = 500;
 
+    const rootGroup = new THREE.Group();
+    scene.add(rootGroup);
+
     let geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setDrawRange(0, 0);
+    
     const material = new THREE.PointsMaterial({ size: 0.03, vertexColors: true });
     const pointsMesh = new THREE.Points(geometry, material);
-    scene.add(pointsMesh);
-
-    const rootGroup = new THREE.Group();
-    scene.add(rootGroup);
+    rootGroup.add(pointsMesh);
+    
+    rootGroup.scale.z = -1;
 
     window.addEventListener('resize', () => {
-      camera.aspect = innerWidth / innerHeight;
-      camera.updateProjectionMatrix();
+      const aspect = innerWidth / innerHeight;
+      perspCamera.aspect = aspect;
+      perspCamera.updateProjectionMatrix();
+
+      orthoCamera.left = -orthoSize * aspect;
+      orthoCamera.right = orthoSize * aspect;
+      orthoCamera.updateProjectionMatrix();
+
       renderer.setSize(innerWidth, innerHeight);
       labelRenderer.setSize(innerWidth, innerHeight);
     });
@@ -193,9 +229,9 @@
       geometry.attributes.position.needsUpdate = true;
       geometry.attributes.color.needsUpdate = true;
 
-      for (const obj of arrows.values()) scene.remove(obj);
-      for (const obj of boxes.values()) scene.remove(obj);
-      for (const obj of labels.values()) scene.remove(obj);
+      for (const obj of arrows.values()) rootGroup.remove(obj);
+      for (const obj of boxes.values()) rootGroup.remove(obj);
+      for (const obj of labels.values()) rootGroup.remove(obj);
       arrows.clear();
       boxes.clear();
       labels.clear();
@@ -204,32 +240,33 @@
         const origin = new THREE.Vector3(...info.centroid);
         const dir = new THREE.Vector3(...info.velocity);
         const speed = info.speed;
+        const dist = origin.length();
 
-        if (speed > 0.01) {
+        if (speed > 0.1) {
           const arrow = new THREE.ArrowHelper(dir.clone().normalize(), origin, speed, 0xffff00);
-          scene.add(arrow);
+          rootGroup.add(arrow);
           arrows.set(cid, arrow);
         }
 
-        if (info.moved) {
+        if (speed > 0.1) {
           const min = new THREE.Vector3(...info.bbox.min);
           const max = new THREE.Vector3(...info.bbox.max);
           const box = new THREE.Box3(min, max);
           const boxHelper = new THREE.Box3Helper(box, 0xffffff);
-          scene.add(boxHelper);
+          rootGroup.add(boxHelper);
           boxes.set(cid, boxHelper);
         }
 
         const labelDiv = document.createElement('div');
         labelDiv.className = 'label';
-        labelDiv.innerHTML = `ID: ${cid}<br>Count: ${info.count}<br>Speed: ${speed.toFixed(2)}`;
+        labelDiv.innerHTML = `ID: ${cid}<br>Count: ${info.count}<br>Speed: ${speed.toFixed(2)}<br>Dist: ${dist.toFixed(2)}`;
         const label = new CSS2DObject(labelDiv);
         label.position.copy(origin);
-        scene.add(label);
+        rootGroup.add(label);
         labels.set(cid, label);
 
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${cid}</td><td>${speed.toFixed(2)}</td><td>${info.count}</td>`;
+        tr.innerHTML = `<td>${cid}</td><td>${speed.toFixed(2)}</td><td>${info.count}</td><td>${dist.toFixed(2)}</td>`;
         tbody.appendChild(tr);
       }
     });
@@ -240,8 +277,26 @@
       localStorage.setItem('viewerRotationZ', rootGroup.rotation.z.toString());
     }
 
+    function rotateZAxis(direction) {
+      const angle = direction === 'pos' ? 0.05 : -0.05;
+      rootGroup.rotation.z += angle;
+    }
+
+    function switchCamera() {
+      isPerspective = !isPerspective;
+      const newCamera = isPerspective ? perspCamera : orthoCamera;
+      newCamera.position.copy(currentCamera.position);
+      newCamera.rotation.copy(currentCamera.rotation);
+      currentCamera = newCamera;
+      controls.object = currentCamera;
+      controls.update();
+    }
+
     document.getElementById("rotateRight").addEventListener("click", () => rotateScene(90));
     document.getElementById("rotateLeft").addEventListener("click", () => rotateScene(-90));
+    document.getElementById("rotateZPos").addEventListener("click", () => rotateZAxis('pos'));
+    document.getElementById("rotateZNeg").addEventListener("click", () => rotateZAxis('neg'));
+    document.getElementById("toggleCamera").addEventListener("click", switchCamera);
 
     const savedRotation = parseFloat(localStorage.getItem('viewerRotationZ'));
     if (!isNaN(savedRotation)) {
@@ -251,9 +306,10 @@
     (function animate() {
       requestAnimationFrame(animate);
       controls.update();
-      renderer.render(scene, camera);
-      labelRenderer.render(scene, camera);
+      renderer.render(scene, currentCamera);
+      labelRenderer.render(scene, currentCamera);
     })();
   </script>
 </body>
+
 </html>
