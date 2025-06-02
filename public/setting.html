@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+  <meta charset="UTF-8">
+  <title>LiDAR 설정 관리</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 20px;
+    }
+
+    label {
+      display: block;
+      margin-top: 10px;
+    }
+
+    input[type="number"],
+    select {
+      width: 120px;
+      padding: 4px;
+      margin-left: 10px;
+    }
+
+    button {
+      margin-top: 20px;
+      padding: 10px 20px;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>클러스터링 설정</h2>
+  <form id="configForm">
+    <label>클러스터링 간격 *DBSCAN_EPS <input type="number" step="0.01" name="DBSCAN_EPS"></label>
+    <label>클러스터 최소 포인트 수 *DBSCAN_MIN_SAMPLES <input type="number" name="DBSCAN_MIN_SAMPLES"></label>
+    <label>최대 매칭 거리 *MAX_MATCH_DIST <input type="number" step="0.01" name="MAX_MATCH_DIST"></label>
+    <label>프레임 간격 *FRAME_TIME_GAP_SEC <input type="number" step="0.01" name="FRAME_TIME_GAP_SEC"></label>
+    <label>최대 클러스터 아이디 *MAX_CLUSTER_ID <input type="number" name="MAX_CLUSTER_ID"></label>
+    <label>원뿔 형태 사용 *USE_CONE_SHAPE
+      <select name="USE_CONE_SHAPE">
+        <option value="true">사용</option>
+        <option value="false">미사용</option>
+      </select>
+    </label>
+    <label>클러스터 반경 *CLUSTER_RADIUS <input type="number" step="0.1" name="CLUSTER_RADIUS"></label>
+    <label>퍼짐 각도 *ANGLE_TOLERANCE_DEG <input type="number" step="0.1" name="ANGLE_TOLERANCE_DEG"></label>
+    <label>원뿔 중심 각도 *CONICAL_CENTER_THETA <input type="number" step="0.1" name="CONICAL_CENTER_THETA"></label>
+    <label>원뿔 중심 각도 *CONICAL_CENTER_PHI <input type="number" step="0.1" name="CONICAL_CENTER_PHI"></label>
+    <button type="submit">설정 저장 및 서버 재시작</button>
+  </form>
+
+  <script>
+    fetch('/config')
+      .then(res => res.json())
+      .then(data => {
+        const form = document.forms.configForm;
+        for (const key in data) {
+          if (form[key]) form[key].value = data[key];
+        }
+      });
+
+    document.getElementById('configForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(e.target);
+      const config = {};
+      formData.forEach((value, key) => {
+        config[key] = (value === "true" || value === "false") ? (value === "true") : parseFloat(value);
+      });
+
+      await fetch('/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+      alert('설정이 저장되었습니다. 서버가 재시작됩니다.');
+    });
+  </script>
+</body>
+
+</html>
